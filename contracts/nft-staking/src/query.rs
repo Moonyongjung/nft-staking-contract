@@ -9,22 +9,23 @@ use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOT
 const SUCCESS: &str = "success";
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps,
-            env: Env,
-            msg: QueryMsg
-        ) -> StdResult<Binary> {
-        match msg {
-            QueryMsg::GetConfig {} => to_binary(&get_config(deps)?),
-            QueryMsg::GetRewardsSchedule {} => to_binary(&get_rewards_schedule(deps)?),
-            QueryMsg::StartTime {} => to_binary(&start_time(deps)?),
-            QueryMsg::Disable {} => to_binary(&disable(deps)?),
-            QueryMsg::TotalRewardsPool {} => to_binary(&total_rewards_pool(deps)?),
-            QueryMsg::WithdrawRewardsPoolAmount {} => to_binary(&withdraw_rewards_pool_amount(deps, env)?),
-            QueryMsg::StakerHistory { staker, token_id } => to_binary(&staker_history(deps, staker, token_id)?),
-            QueryMsg::TokenInfo { token_id } => to_binary(&token_infos(deps, token_id)?),
-            QueryMsg::EstimateRewards { max_period, staker, token_id } => to_binary(&estimate_rewards(deps, env, max_period, token_id, staker)?),
-            QueryMsg::NextClaim { staker, token_id } => to_binary(&next_claims(deps, staker, token_id)?),
-        }
+pub fn query(
+    deps: Deps,
+    env: Env,
+    msg: QueryMsg
+) -> StdResult<Binary> {
+    match msg {
+        QueryMsg::GetConfig {} => to_binary(&get_config(deps)?),
+        QueryMsg::GetRewardsSchedule {} => to_binary(&get_rewards_schedule(deps)?),
+        QueryMsg::StartTime {} => to_binary(&start_time(deps)?),
+        QueryMsg::Disable {} => to_binary(&disable(deps)?),
+        QueryMsg::TotalRewardsPool {} => to_binary(&total_rewards_pool(deps)?),
+        QueryMsg::WithdrawRewardsPoolAmount {} => to_binary(&withdraw_rewards_pool_amount(deps, env)?),
+        QueryMsg::StakerHistory { staker, token_id } => to_binary(&staker_history(deps, staker, token_id)?),
+        QueryMsg::TokenInfo { token_id } => to_binary(&token_infos(deps, token_id)?),
+        QueryMsg::EstimateRewards { max_period, staker, token_id } => to_binary(&estimate_rewards(deps, env, max_period, token_id, staker)?),
+        QueryMsg::NextClaim { staker, token_id } => to_binary(&next_claims(deps, staker, token_id)?),
+    }
 }
 
 fn get_config(deps: Deps) -> StdResult<ConfigResponse> {
@@ -89,10 +90,23 @@ fn start_time(
 fn disable(
     deps: Deps,
 ) -> StdResult<DisableResponse> {
-    let disable = DISABLE.load(deps.storage)?;
+    let disable_state: bool;
+    let res_msg: String;
+
+    let start_timestamp = START_TIMESTAMP.may_load(deps.storage)?;
+    if start_timestamp.is_none() {
+        disable_state = true;
+        res_msg = ContractError::NotStarted {}.to_string()
+        
+    } else {
+        let disable = DISABLE.load(deps.storage)?;
+        disable_state = disable;
+        res_msg = SUCCESS.to_string()
+    }
+
     let res = DisableResponse {
-        disable: disable,
-        res_msg: SUCCESS.to_string(),
+        disable: disable_state,
+        res_msg: res_msg,
     };
 
     Ok(res)

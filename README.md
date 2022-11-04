@@ -2,11 +2,7 @@
 NFT staking refers to the locking up of NFTs on a platform or protocol to receive staking rewards and other privileges. Most of NFT staking contracts are based ERC. This `NFT staking contract` is constructed of [CW721](https://github.com/CosmWasm/cw-nfts/blob/main/packages/cw721/README.md) to make this work in other environments based on [Cosmos-sdk](https://github.com/cosmos/cosmos-sdk). It is inspired by [solidity contract of Animocabrands](https://github.com/animocabrands/ethereum-contracts-nft_staking).
 
 ## Prerequisites
-1. Increase allowance `NFT staking contract` about contract owner(=payer) of cw20 that is rewards token. (rewards pool)
-2. Approve `NFT staking contract` about staker's token ID of CW721 NFT contract. (for transferNft)
-
-Considering of prerequisites change. This `NFT staking contract` version is after the `increaseAllowance` for the payer of the rewards token contract is preceded, the amount of rewards is transferred from the payer to the `NFT staking contract` through the executing in the this contract. Also, the NFT of staker in the CW721 contract executes `Approve` and `NFT staking contract` can execute `transferNft` when staker stakes NFT in order to replace NFT owner from staker to `NFT staking contract`. 
-In other way, payer transfers cw20 token amount to `NFT staking contract` directly to add rewards pool, and staker executes `transferNft` directly to change NFT owner.
+1. Contract owner sends message to cw20 contract to execute `send` function in order to supply rewards token pool.
 
 ## Usage
 ### Store & Instantiate
@@ -31,6 +27,12 @@ e.g.
     "rewards_token_contract":"xpla1vrvp5w6lm3zj9cwevx4ljnt6e9khhfvqawc8f4qa872lcelkdhcqznz49p"
 }
 ```
+
+### Stake
+If a staker wants to stake NFT, the staker should send message which includes address of the `NFT staking contract` with NFT token id to cw721 contract to execute `send_nft` function. `NFT staking contract` receives `ReceiveNft` message of cw721 at the same time, and execute staking function. 
+
+### Unstake & Claim rewards
+In order to unbond the staked NFT, a staker sends message that is `unstake` to the `NFT staking contract`. Similarly, the staker sends message is `claim` when the staker wants to claim his rewards. As unstaking time, balances of staker's rewards are transferred to cw20 token address of the staker from the `NFT staking contract`.
 
 ## Concepts
 ### Staking

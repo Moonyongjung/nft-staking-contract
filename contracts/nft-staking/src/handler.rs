@@ -1,6 +1,6 @@
 use std::ops::Add;
 
-use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Env, Deps};
+use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps};
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse};
 use cw721::{Cw721QueryMsg, OwnerOfResponse, Cw721ExecuteMsg};
 
@@ -75,25 +75,6 @@ pub fn check_contract_owner(
     Ok(true)
 }
 
-// check message sender is nft owner.
-pub fn check_nft_owner(
-    deps: DepsMut,
-    info: MessageInfo,
-    token_id: String,
-    config: Config,
-) -> Result<bool, ContractError> {
-    let nft_owner_info = query_owner_of(deps, token_id.clone(), config.clone().white_listed_nft_contract)?;
-
-    if nft_owner_info.owner != info.sender.clone() {
-        return Err(ContractError::InvalidNftOwner{
-            requester: info.sender.to_string(),
-            nft_owner: nft_owner_info.owner,
-        })
-    }
-
-    Ok(true)
-}
-
 // check message sender is nft owner which records in the TOKEN_INFOs state.
 pub fn check_staker(
     deps: DepsMut,
@@ -140,30 +121,6 @@ pub fn check_disable(
     Ok(disable)
 }
 
-// execute token of rewards transfer.
-pub fn execute_rewards_transfer_from(
-    rewards_token_contract: String,
-    owner: Addr,
-    contract: String,
-    amount: u128,
-) -> Result<Vec<CosmosMsg>, ContractError> {
-    let mut messages: Vec<CosmosMsg> = vec![];
-    let u128_amount = Uint128::from(amount);
-
-    let transfer_from: CosmosMsg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: rewards_token_contract.to_string(),
-        msg: to_binary(&Cw20ExecuteMsg::TransferFrom { 
-            owner: owner.to_string(), 
-            recipient: contract.to_string(), 
-            amount:  u128_amount,
-        })?,
-        funds: vec![]
-    });
-    messages.push(transfer_from);
-
-    Ok(messages)
-}
-
 // execute token transfer.
 pub fn execute_token_contract_transfer(
     rewards_token_contract: String,
@@ -178,26 +135,6 @@ pub fn execute_token_contract_transfer(
         msg: to_binary(&Cw20ExecuteMsg::Transfer { 
             recipient: recipient, 
             amount:  u128_amount,
-        })?,
-        funds: vec![]
-    });
-    messages.push(transfer_from);
-
-    Ok(messages)
-}
-
-// execute transfer nft for replacing owner when stake.
-pub fn execute_transfer_nft_stake(
-    env: Env,
-    token_id: String,
-    nft_contract: String,
-) -> Result<Vec<CosmosMsg>, ContractError> {
-    let mut messages: Vec<CosmosMsg> = vec![];
-    let transfer_from: CosmosMsg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: nft_contract,
-        msg: to_binary(&Cw721ExecuteMsg::TransferNft { 
-            recipient: env.contract.address.to_string(),
-            token_id: token_id, 
         })?,
         funds: vec![]
     });

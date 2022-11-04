@@ -44,6 +44,18 @@ pub enum ContractError {
         disable: bool,
     },
 
+    #[error("invalid cw20 contract, rewards token contract is {rewards_token_contract}, but request is {requester}")]
+    InvalidRewardsTokenContract {
+        rewards_token_contract: String,
+        requester: String,
+    },
+
+    #[error("invalid cw721 contract, whitelisted contract is {white_listed_contract}, but request is {requester}")]
+    InvalidWhitelistedContract {
+        white_listed_contract: String,
+        requester: String,
+    },
+
     #[error("unstaked token cooldown")]
     UnstakedTokenCooldown {},
 

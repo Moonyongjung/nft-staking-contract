@@ -1,3 +1,5 @@
+use cw20::Cw20ReceiveMsg;
+use cw721::Cw721ReceiveMsg;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,9 +20,7 @@ pub enum ExecuteMsg {
     AddRewardsForPeriods {
         rewards_per_cycle: u128,
     },
-    AddRewardsPool {
-        add_rewards: u128,
-    },
+    Receive(Cw20ReceiveMsg),
     Start {},
     Disable {},
     Enable {},
@@ -28,10 +28,7 @@ pub enum ExecuteMsg {
         amount: u128,
     },
     WithdrawAllRewardsPool {},
-    StakeNft {
-        token_id: String,
-        staker: String,
-    },
+    ReceiveNft(Cw721ReceiveMsg),
     UnstakeNft {
         token_id: String,
         staker: String,
