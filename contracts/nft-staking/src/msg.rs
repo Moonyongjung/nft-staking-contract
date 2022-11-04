@@ -32,7 +32,6 @@ pub enum ExecuteMsg {
     ReceiveNft(Cw721ReceiveMsg),
     UnstakeNft {
         token_id: String,
-        staker: String,
         claim_recipient_address: Option<String>,
     },
     ClaimRewards {

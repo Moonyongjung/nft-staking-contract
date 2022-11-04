@@ -74,7 +74,7 @@ pub fn execute(
         ExecuteMsg::WithdrawRewardsPool { amount } => withdraw_rewards_pool(deps, info, config, amount),
         ExecuteMsg::WithdrawAllRewardsPool {} => withdraw_all_rewards_pool(deps, info, env, config),
         ExecuteMsg::ReceiveNft(msg) => stake_nft(deps, env, info, config, msg),
-        ExecuteMsg::UnstakeNft { token_id, staker, claim_recipient_address } => unstake_nft(deps, env, info, config, token_id, staker, claim_recipient_address),
+        ExecuteMsg::UnstakeNft { token_id, claim_recipient_address } => unstake_nft(deps, env, info, config, token_id, claim_recipient_address),
         ExecuteMsg::ClaimRewards { max_period, token_id, claim_recipient_address } => claim_rewards(deps, info, env, max_period, token_id, config, claim_recipient_address),
     }
 }
@@ -392,9 +392,9 @@ pub fn unstake_nft(
     info: MessageInfo,
     config: Config,
     token_id: String,
-    staker: String,
     claim_recipient_address: Option<String>,
 ) -> Result<Response, ContractError> {
+    let staker = info.clone().sender.to_string();
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
     let token_info = check_staker(deps.branch(), info.clone(), token_id.clone())?;
 
