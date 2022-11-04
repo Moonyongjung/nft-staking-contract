@@ -1,9 +1,12 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, Binary, Env, StdResult, Deps};
+use cosmwasm_std::{to_binary, Binary, Env, StdResult, Deps, QueryRequest, WasmQuery, StdError};
+use cw20::Expiration;
+use cw721::{Cw721QueryMsg, AllNftInfoResponse, OwnerOfResponse, NftInfoResponse, Approval};
+use cw721_base::Extension;
 use crate::ContractError;
 use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance};
-use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse};
+use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse};
 use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, Snapshot, STAKER_HISTORIES, TokenInfo, TOKEN_INFOS, Claim, NEXT_CLAIMS, NextClaim, NUMBER_OF_STAKED_NFTS};
 
 const SUCCESS: &str = "success";
@@ -26,6 +29,7 @@ pub fn query(
         QueryMsg::EstimateRewards { max_period, staker, token_id } => to_binary(&estimate_rewards(deps, env, max_period, token_id, staker)?),
         QueryMsg::NextClaim { staker, token_id } => to_binary(&next_claims(deps, staker, token_id)?),
         QueryMsg::NumberOfStakedNfts {} => to_binary(&number_of_staked_nfts(deps)?),
+        QueryMsg::StakedAllNftInfo { token_id } => to_binary(&staked_all_nft_info(deps, token_id)?),
     }
 }
 
@@ -343,4 +347,56 @@ fn number_of_staked_nfts(
         number_of_staked_nfts: number_of_staked_nfts,
         res_msg: SUCCESS.to_string(),
     })
+}
+
+fn staked_all_nft_info(
+    deps: Deps,
+    token_id: String,
+) -> StdResult<StakedAllNftInfoResponse<Extension>> {
+    let config = get_config(deps)?;
+    
+    let all_nft_info: Result<AllNftInfoResponse::<Extension>, StdError>  = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart{
+        contract_addr: config.white_listed_nft_contract,
+        msg: to_binary(&Cw721QueryMsg::AllNftInfo { 
+            token_id: token_id, 
+            include_expired: Some(true),
+        })?,
+    }));
+
+    match all_nft_info {
+        Ok(t) => {
+            let staked_all_nft_info = StakedAllNftInfoResponse {
+                all_nft_info: t,
+                res_msg: SUCCESS.to_string(),
+            };
+        
+            Ok(staked_all_nft_info)
+        },
+        Err(e) => {
+            let empty_approval: Vec<Approval> = vec![Approval{
+                spender:"".to_string(), 
+                expires: Expiration::default(),
+            }];
+
+            let empty_res = AllNftInfoResponse {
+                access: OwnerOfResponse {
+                    owner: "".to_string(),
+                    approvals: empty_approval,
+                },
+
+                info: NftInfoResponse {
+                    token_uri: Some("".to_string()),
+                    extension: Extension::None,
+                }
+            };
+
+
+            let staked_all_nft_info = StakedAllNftInfoResponse {
+                all_nft_info: empty_res,
+                res_msg: e.to_string(),
+            };
+        
+            Ok(staked_all_nft_info) 
+        }            
+    }
 }

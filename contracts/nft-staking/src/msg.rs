@@ -1,5 +1,5 @@
 use cw20::Cw20ReceiveMsg;
-use cw721::Cw721ReceiveMsg;
+use cw721::{Cw721ReceiveMsg, AllNftInfoResponse};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +67,9 @@ pub enum QueryMsg {
         token_id: String,
     },
     NumberOfStakedNfts {},
+    StakedAllNftInfo {
+        token_id:String,
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -166,6 +169,13 @@ pub struct EstimateRewardsResponse {
 #[serde(rename_all = "snake_case")]
 pub struct NumberOfStakedNftsResponse {
     pub number_of_staked_nfts: u128,
+    pub res_msg: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct StakedAllNftInfoResponse<T> {
+    pub all_nft_info: AllNftInfoResponse<T>,
     pub res_msg: String,
 }
 
