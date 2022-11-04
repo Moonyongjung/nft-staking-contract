@@ -91,8 +91,8 @@ pub fn execute(
         ExecuteMsg::WithdrawRewardsPool { amount } => withdraw_rewards_pool(deps, info, config, amount),
         ExecuteMsg::WithdrawAllRewardsPool {} => withdraw_all_rewards_pool(deps, info, env, config),
         ExecuteMsg::ReceiveNft(msg) => stake_nft(deps, env, info, config, msg),
-        ExecuteMsg::UnstakeNft { token_id, staker } => unstake_nft(deps, env, info, config, token_id, staker),
-        ExecuteMsg::ClaimRewards { max_period, token_id } => claim_rewards(deps, info, env, max_period, token_id, config),
+        ExecuteMsg::UnstakeNft { token_id, staker, claim_recipient_address } => unstake_nft(deps, env, info, config, token_id, staker, claim_recipient_address),
+        ExecuteMsg::ClaimRewards { max_period, token_id, claim_recipient_address } => claim_rewards(deps, info, env, max_period, token_id, config, claim_recipient_address),
     }
 }
 
@@ -374,6 +374,7 @@ pub fn unstake_nft(
     config: Config,
     token_id: String,
     staker: String,
+    claim_recipient_address: Option<String>,
 ) -> Result<Response, ContractError> {
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
     let token_info = check_staker(deps.branch(), info.clone(), token_id.clone())?;
@@ -398,7 +399,11 @@ pub fn unstake_nft(
         let current_period = get_current_period(timestamp.clone(), start_timestamp.clone(), config.clone()).unwrap();
         let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), current_period, timestamp, start_timestamp, config.clone()).unwrap();
         if compute_rewards.0.amount != 0 {
-            claim_rewards_response = claim_rewards(deps.branch(), info, env, current_period, token_id.clone(), config.clone()).unwrap();
+            let mut recipient: Option<String> = None;
+            if !claim_recipient_address.is_none() {
+                recipient = claim_recipient_address;
+            }
+            claim_rewards_response = claim_rewards(deps.branch(), info, env, current_period, token_id.clone(), config.clone(), recipient).unwrap();
         }
 
         update_histories(deps.branch(), staker_tokenid_key.clone(), !is_staked, current_cycle)?;
@@ -440,6 +445,7 @@ pub fn claim_rewards(
     max_period: u64,
     token_id: String,
     config: Config,
+    claim_recipient_address: Option<String>,
 ) -> Result<Response, ContractError> {
     let start_timestamp = check_start_timestamp(deps.branch())?;
     check_disable(deps.branch())?;
@@ -502,9 +508,15 @@ pub fn claim_rewards(
     if claim.amount == 0 {
         return Err(ContractError::NoAmountClaim {})
     }
+    
+    // if staker want to transfer send other address as request claim function, set claim recipient address. 
+    let mut recipient = staker;
+    if !claim_recipient_address.is_none() {
+        recipient = claim_recipient_address.unwrap();
+    }
 
     // transfer token amount of staked rewards.
-    let message = execute_token_contract_transfer(config.rewards_token_contract, staker, claim.amount);
+    let message = execute_token_contract_transfer(config.rewards_token_contract, recipient.clone(), claim.amount);
     match message {
         Ok(_) => {},
         Err(e) => {
@@ -517,6 +529,7 @@ pub fn claim_rewards(
         .add_attribute("claim_start_period", claim.start_period.to_string())
         .add_attribute("claim_periods", claim.periods.to_string())
         .add_attribute("claim_amount", claim.amount.to_string())
+        .add_attribute("claim_recipient", recipient.to_string())
         .add_messages(message.unwrap())
     )
 }

@@ -32,7 +32,9 @@ e.g.
 If a staker wants to stake NFT, the staker should send message which includes address of the `NFT staking contract` with NFT token id to cw721 contract to execute `send_nft` function. `NFT staking contract` receives `ReceiveNft` message of cw721 at the same time, and execute staking function. 
 
 ### Unstake & Claim rewards
-In order to unbond the staked NFT, a staker sends message that is `unstake` to the `NFT staking contract`. Similarly, the staker sends message is `claim` when the staker wants to claim his rewards. As unstaking time, balances of staker's rewards are transferred to cw20 token address of the staker from the `NFT staking contract`.
+In order to unbond the staked NFT, a staker sends message that is `unstake` to the `NFT staking contract`. Similarly, the staker sends message is `claim` when the staker wants to claim his rewards. As unstaking time, balances of staker's rewards are transferred to cw20 token address of the staker from the `NFT staking contract`. 
+
+If the staker needs to replace recipient get claimed rewards, the staker is able to specify other recipient account address in the claim message as `claim_recipient_address`. Also, unstaking case is same.
 
 ## Concepts
 ### Staking

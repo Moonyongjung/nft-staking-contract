@@ -32,10 +32,12 @@ pub enum ExecuteMsg {
     UnstakeNft {
         token_id: String,
         staker: String,
+        claim_recipient_address: Option<String>,
     },
     ClaimRewards {
         max_period: u64,
         token_id: String,
+        claim_recipient_address: Option<String>,
     },
 }
 
