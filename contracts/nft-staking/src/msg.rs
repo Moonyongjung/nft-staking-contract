@@ -17,6 +17,7 @@ pub struct InstantiateMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
+    SetConfig(SetConfigMsg),
     AddRewardsForPeriods {
         rewards_per_cycle: u128,
     },
@@ -66,6 +67,15 @@ pub enum QueryMsg {
         staker: String,
         token_id: String,
     },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct SetConfigMsg {
+    pub cycle_length_in_seconds: Option<u64>,
+    pub period_length_in_cycles: Option<u64>,
+    pub white_listed_nft_contract: Option<String>,
+    pub rewards_token_contract: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

@@ -1,12 +1,14 @@
-use std::ops::Add;
+use std::{ops::Add, str::FromStr};
 
-use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps};
-use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse};
-use cw721::{Cw721QueryMsg, OwnerOfResponse, Cw721ExecuteMsg};
+use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps, Coin};
+use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
+use cw721::{Cw721ExecuteMsg};
 
 use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, TOKEN_INFOS, TokenInfo, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim}, ContractError, msg::{UpdateHistoriesResponse}};
 
 pub const IS_STAKED: bool = true;
+const MIN_CYCLE_LENGTH: u64 = 10;
+const MIN_PERIOD: u64 = 2;
 
 // convert string to Addr type.
 pub fn from_string_to_addr(
@@ -52,6 +54,53 @@ pub fn get_cycle(
     }
 
     Ok((timestamp - start_timestamp) / config.cycle_length_in_seconds + 1)
+}
+
+// validate of cycle length.
+pub fn is_valid_cycle_length(
+    cycle_length_in_seconds: u64,
+) -> Result<bool, ContractError> {
+    // cycle length must be longer than MIN_CYCLE_LENGTH.  
+    if cycle_length_in_seconds < MIN_CYCLE_LENGTH {
+        return Err(ContractError::CycleLengthInvalid { 
+            min_cycle_length: MIN_CYCLE_LENGTH,
+            cycle_length_in_seconds: cycle_length_in_seconds 
+        })
+    } else {
+        let res = true;
+        Ok(res)
+    }    
+}
+
+// validate of period length.
+pub fn is_valid_period_length(
+    period_length_in_cycles: u64,
+) -> Result<bool, ContractError> {
+    // period length must be longer than MIN_PERIOD.
+    if period_length_in_cycles < MIN_PERIOD {
+        return Err(ContractError::PeriodLengthInvalid { 
+            min_period: MIN_PERIOD,
+            period_length_in_cycles: period_length_in_cycles 
+        })
+    } else {
+        let res = true;
+        Ok(res)
+    }
+}
+
+// make contract message info.
+pub fn contract_info(
+    msg: Cw20ReceiveMsg,
+) -> Result<MessageInfo, ()>{
+    let contract_owner_info = MessageInfo {
+        sender: Addr::unchecked(msg.sender.clone()),
+        funds: [Coin{
+            denom: "".to_string(),
+            amount: Uint128::from_str("0").unwrap(),
+        }].to_vec(),
+    }; 
+
+    Ok(contract_owner_info)
 }
 
 // mapping staker and nft token id in order to use state key.
@@ -162,24 +211,6 @@ pub fn execute_transfer_nft_unstake(
     messages.push(transfer_from);
 
     Ok(messages)
-}
-
-// query owner of nft.
-pub fn query_owner_of(
-    deps: DepsMut,
-    token_id: String,
-    nft_contract: String,
-) -> Result<OwnerOfResponse, ContractError>{
-
-    let owner_of_response: OwnerOfResponse = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart{
-        contract_addr: nft_contract,
-        msg: to_binary(&Cw721QueryMsg::OwnerOf { 
-            token_id: token_id, 
-            include_expired: Some(true),
-        })?,
-    }))?;
-
-    Ok(owner_of_response)
 }
 
 // query rewards token balance.

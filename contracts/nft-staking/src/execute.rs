@@ -1,23 +1,18 @@
-use std::str::FromStr;
-
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Addr, Coin, Uint128};
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response};
 use cw2::set_contract_version;
 use cw20::{Cw20ReceiveMsg};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
-use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, check_staker, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance};
-use crate::msg::{ExecuteMsg, InstantiateMsg};
+use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, check_staker, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, contract_info};
+use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
 use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "nft-staking";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-const MIN_CYCLE_LENGTH: u64 = 10;
-const MIN_PERIOD: u64 = 2;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -26,21 +21,8 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    // cycle length must be longer than MIN_CYCLE_LENGTH.  
-    if msg.cycle_length_in_seconds < MIN_CYCLE_LENGTH {
-        return Err(ContractError::CycleLengthInvalid { 
-            min_cycle_length: MIN_CYCLE_LENGTH,
-            cycle_length_in_seconds: msg.cycle_length_in_seconds 
-        })
-    }
-
-    // period length must be longer than MIN_PERIOD.
-    if msg.period_length_in_cycles < MIN_PERIOD {
-        return Err(ContractError::PeriodLengthInvalid { 
-            min_period: MIN_PERIOD,
-            period_length_in_cycles: msg.period_length_in_cycles 
-        })
-    }
+    is_valid_cycle_length(msg.cycle_length_in_seconds)?;
+    is_valid_period_length(msg.period_length_in_cycles)?;
 
     // setup contract configuration.
     // the owner is contract instantiater and is able to execute functions except stake, unstake and claim rewards.
@@ -83,6 +65,7 @@ pub fn execute(
     let config = CONFIG_STATE.load(deps.storage)?;
     
     match msg {
+        ExecuteMsg::SetConfig(msg) => set_config(deps, info, config, msg),
         ExecuteMsg::AddRewardsForPeriods { rewards_per_cycle } => add_rewards_for_periods(deps, env, info, rewards_per_cycle, config),
         ExecuteMsg::Receive (msg) => add_rewards_pool(deps, info, env, config, msg),
         ExecuteMsg::Start {} => start(deps, info, env, config),
@@ -94,6 +77,52 @@ pub fn execute(
         ExecuteMsg::UnstakeNft { token_id, staker, claim_recipient_address } => unstake_nft(deps, env, info, config, token_id, staker, claim_recipient_address),
         ExecuteMsg::ClaimRewards { max_period, token_id, claim_recipient_address } => claim_rewards(deps, info, env, max_period, token_id, config, claim_recipient_address),
     }
+}
+
+// change configuration.
+pub fn set_config(
+    deps: DepsMut,
+    info: MessageInfo,
+    config: Config,
+    msg: SetConfigMsg,
+) -> Result<Response, ContractError> {
+    check_contract_owner(info.clone(), config.clone())?;
+
+    let mut cycle_length_in_seconds = config.clone().cycle_length_in_seconds;
+    let mut period_length_in_cycles = config.clone().period_length_in_cycles;
+    let mut white_listed_nft_contract = config.clone().white_listed_nft_contract;
+    let mut rewards_token_contract = config.clone().rewards_token_contract;
+
+    if !msg.cycle_length_in_seconds.is_none() && is_valid_cycle_length(msg.cycle_length_in_seconds.unwrap())? {
+        cycle_length_in_seconds = msg.cycle_length_in_seconds.unwrap();
+    } 
+    if !msg.period_length_in_cycles.is_none() && is_valid_period_length(msg.period_length_in_cycles.unwrap())? {
+        period_length_in_cycles = msg.period_length_in_cycles.unwrap();
+    }
+    if !msg.white_listed_nft_contract.is_none() {
+        white_listed_nft_contract = msg.white_listed_nft_contract.unwrap();
+    }
+    if !msg.rewards_token_contract.is_none() {
+        rewards_token_contract = msg.rewards_token_contract.unwrap();
+    }
+
+    let config_state = Config {
+        owner: config.clone().owner,
+        cycle_length_in_seconds: cycle_length_in_seconds.clone(),
+        period_length_in_cycles: period_length_in_cycles.clone(),
+        white_listed_nft_contract: white_listed_nft_contract.clone(),
+        rewards_token_contract: rewards_token_contract.clone(),
+    };
+
+    CONFIG_STATE.save(deps.storage, &config_state)?;
+
+    Ok(Response::new()
+        .add_attribute("method", "set_config")
+        .add_attribute("new_cycle_length_in_seconds", cycle_length_in_seconds.to_string())
+        .add_attribute("new_period_length_in_cycles", period_length_in_cycles.to_string())
+        .add_attribute("new_white_listed_nft_contract", white_listed_nft_contract)
+        .add_attribute("new_rewards_token_contract", rewards_token_contract)
+    )
 }
 
 // set rewards schedule.
@@ -137,15 +166,7 @@ pub fn add_rewards_pool (
         })
     }
 
-    let contract_owner_info = MessageInfo {
-        sender: Addr::unchecked(msg.sender.clone()),
-        funds: [Coin{
-            denom: "".to_string(),
-            amount: Uint128::from_str("0").unwrap(),
-        }].to_vec(),
-    }; 
-
-    check_contract_owner(contract_owner_info, config.clone())?;
+    check_contract_owner(contract_info(msg.clone()).unwrap(), config.clone())?;
 
     let total_rewards_pool = TOTAL_REWARDS_POOL.load(deps.storage)?;
     let rewards = total_rewards_pool + msg.amount.clone().u128();
@@ -234,7 +255,6 @@ pub fn withdraw_rewards_pool(
     check_contract_owner(info.clone(), config.clone())?;
 
     let disabled = check_disable(deps)?;
-
     let rewards_token_contract = config.clone().rewards_token_contract;
     let owner = info.clone().sender;
     let message = execute_token_contract_transfer(rewards_token_contract, owner.to_string(), amount.clone())?;
@@ -260,7 +280,6 @@ pub fn withdraw_all_rewards_pool(
     check_contract_owner(info.clone(), config.clone())?;
 
     let disabled = check_disable(deps.branch())?;
-
     let rewards_token_contract = config.clone().rewards_token_contract;
     let owner = info.clone().sender;
     let address = env.contract.address.to_string();
@@ -485,11 +504,7 @@ pub fn claim_rewards(
         STAKER_HISTORIES.save(deps.storage, staker_tokenid_key.clone(), &staker_history)?;
     }
 
-    if claim.periods == 0 {
-        return Err(ContractError::InvalidClaim {})
-    }
-
-    if next_claim.period == 0 {
+    if claim.periods == 0 || next_claim.period == 0{
         return Err(ContractError::InvalidClaim {})
     }
 
