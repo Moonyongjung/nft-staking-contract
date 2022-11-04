@@ -66,6 +66,7 @@ pub enum QueryMsg {
         staker: String,
         token_id: String,
     },
+    NumberOfStakedNfts {},
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -158,6 +159,13 @@ pub struct TokenInfosResponse {
 pub struct EstimateRewardsResponse {
     pub req_staker_tokenid_key: String,
     pub claim: Claim,
+    pub res_msg: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct NumberOfStakedNftsResponse {
+    pub number_of_staked_nfts: u128,
     pub res_msg: String,
 }
 

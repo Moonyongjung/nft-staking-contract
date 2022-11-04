@@ -3,8 +3,8 @@ use cosmwasm_std::entry_point;
 use cosmwasm_std::{to_binary, Binary, Env, StdResult, Deps};
 use crate::ContractError;
 use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance};
-use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse};
-use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, Snapshot, STAKER_HISTORIES, TokenInfo, TOKEN_INFOS, Claim, NEXT_CLAIMS, NextClaim};
+use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse};
+use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, Snapshot, STAKER_HISTORIES, TokenInfo, TOKEN_INFOS, Claim, NEXT_CLAIMS, NextClaim, NUMBER_OF_STAKED_NFTS};
 
 const SUCCESS: &str = "success";
 
@@ -25,6 +25,7 @@ pub fn query(
         QueryMsg::TokenInfo { token_id } => to_binary(&token_infos(deps, token_id)?),
         QueryMsg::EstimateRewards { max_period, staker, token_id } => to_binary(&estimate_rewards(deps, env, max_period, token_id, staker)?),
         QueryMsg::NextClaim { staker, token_id } => to_binary(&next_claims(deps, staker, token_id)?),
+        QueryMsg::NumberOfStakedNfts {} => to_binary(&number_of_staked_nfts(deps)?),
     }
 }
 
@@ -322,5 +323,24 @@ pub fn estimate_rewards(
         req_staker_tokenid_key: staker_tokenid_key, 
         claim: claim,
         res_msg: SUCCESS.to_string()
+    })
+}
+
+fn number_of_staked_nfts(
+    deps: Deps,
+) -> StdResult<NumberOfStakedNftsResponse> {
+    let start_timestamp = START_TIMESTAMP.may_load(deps.storage)?;
+    if start_timestamp.is_none() {
+        return Ok(NumberOfStakedNftsResponse { 
+            number_of_staked_nfts: 0,
+            res_msg: ContractError::NotStarted {}.to_string()
+        })
+    }
+
+    let number_of_staked_nfts = NUMBER_OF_STAKED_NFTS.load(deps.storage)?;
+
+    Ok(NumberOfStakedNftsResponse {
+        number_of_staked_nfts: number_of_staked_nfts,
+        res_msg: SUCCESS.to_string(),
     })
 }

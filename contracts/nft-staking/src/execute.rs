@@ -6,9 +6,9 @@ use cw20::{Cw20ReceiveMsg};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
-use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, check_staker, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, contract_info};
+use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, check_staker, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, contract_info, manage_number_nfts};
 use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
-use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim};
+use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "nft-staking";
@@ -44,6 +44,7 @@ pub fn instantiate(
     // Default of total rewards pool is zero and of disable state is false.
     TOTAL_REWARDS_POOL.save(deps.storage, &0)?;
     DISABLE.save(deps.storage, &false)?;
+    NUMBER_OF_STAKED_NFTS.save(deps.storage, &0)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -373,6 +374,7 @@ pub fn stake_nft(
         withdraw_cycle: 0,
     };
     TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &new_token_info)?;
+    manage_number_nfts(deps.branch(), true);
 
     Ok(Response::new()
         .add_attribute("method", "stake_nft")
@@ -441,6 +443,7 @@ pub fn unstake_nft(
 
     // next claims of specified nft are eliminated.
     NEXT_CLAIMS.remove(deps.branch().storage, staker_tokenid_key.clone());
+    manage_number_nfts(deps.branch(), false);
 
     let message = execute_transfer_nft_unstake(token_id, staker, config.white_listed_nft_contract)?;
 

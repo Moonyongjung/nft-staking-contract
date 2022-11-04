@@ -4,11 +4,12 @@ use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, Wasm
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
 use cw721::{Cw721ExecuteMsg};
 
-use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, TOKEN_INFOS, TokenInfo, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim}, ContractError, msg::{UpdateHistoriesResponse}};
+use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, TOKEN_INFOS, TokenInfo, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS}, ContractError, msg::{UpdateHistoriesResponse}};
 
 pub const IS_STAKED: bool = true;
 const MIN_CYCLE_LENGTH: u64 = 10;
 const MIN_PERIOD: u64 = 2;
+
 
 // convert string to Addr type.
 pub fn from_string_to_addr(
@@ -421,4 +422,16 @@ pub fn snapshot_init() -> Result<Snapshot, ContractError> {
         start_cycle: 0,
     };
     Ok(snapshot)
+}
+
+pub fn manage_number_nfts(
+    deps: DepsMut,
+    is_increase: bool,
+) {
+    let number_of_staked_nfts = NUMBER_OF_STAKED_NFTS.load(deps.storage).unwrap();
+    if is_increase {
+        NUMBER_OF_STAKED_NFTS.save(deps.storage, &(number_of_staked_nfts + 1)).unwrap();
+    } else {
+        NUMBER_OF_STAKED_NFTS.save(deps.storage, &(number_of_staked_nfts - 1)).unwrap();
+    }
 }

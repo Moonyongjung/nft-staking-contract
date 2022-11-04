@@ -48,3 +48,4 @@ pub const DISABLE: Item<bool> = Item::new("disable");
 pub const STAKER_HISTORIES: Map<String, Vec<Snapshot>> = Map::new("staker_histories");
 pub const NEXT_CLAIMS: Map<String, NextClaim> = Map::new("next_claims");
 pub const TOKEN_INFOS: Map<String, TokenInfo> = Map::new("token_infos");
+pub const NUMBER_OF_STAKED_NFTS: Item<u128> = Item::new("number_of_staked_nfts");
