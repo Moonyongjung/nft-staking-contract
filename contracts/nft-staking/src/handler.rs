@@ -4,12 +4,11 @@ use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, Wasm
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
 use cw721::{Cw721ExecuteMsg};
 
-use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, TOKEN_INFOS, TokenInfo, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS}, ContractError, msg::{UpdateHistoriesResponse}};
+use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, TOKEN_INFOS, TokenInfo, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD}, ContractError, msg::{UpdateHistoriesResponse}};
 
 pub const IS_STAKED: bool = true;
 const MIN_CYCLE_LENGTH: u64 = 10;
 const MIN_PERIOD: u64 = 2;
-
 
 // convert string to Addr type.
 pub fn from_string_to_addr(
@@ -300,11 +299,18 @@ pub fn update_staker_history(
 pub fn compute_rewards(
     deps: Deps,
     staker_tokenid_key: String,
-    max_period: u64,
+    periods: u64,
     now: u64,
     start_timestamp: u64,
     config: Config,
 ) -> Result<(Claim, NextClaim), ContractError> {
+    let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.storage)?;
+    if periods > max_compute_period {
+        return Err(ContractError::InvalidMaxPeriod { 
+            periods: periods, 
+            max_compute_period: max_compute_period, 
+        })
+    }
     let mut claim = Claim {
         start_period: 0,
         periods: 0,
@@ -317,7 +323,7 @@ pub fn compute_rewards(
     };
 
     // computing 0 periods.
-    if max_period == 0 {
+    if periods == 0 {
         return Ok((claim, next_claim))
     }
 
@@ -356,8 +362,8 @@ pub fn compute_rewards(
 
     // exclues the current period.
     claim.periods = end_claim_period - next_claim.period;
-    if max_period < claim.periods {
-        claim.periods = max_period;
+    if periods < claim.periods {
+        claim.periods = periods;
     }
 
     // re-calibrate the end claim period based on the actual number of periods to claim.

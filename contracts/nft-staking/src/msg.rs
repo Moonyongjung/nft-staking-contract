@@ -22,6 +22,9 @@ pub enum ExecuteMsg {
         rewards_per_cycle: u128,
     },
     Receive(Cw20ReceiveMsg),
+    SetMaxComputePeriod {
+        new_max_compute_period: u64,
+    },
     Start {},
     Disable {},
     Enable {},
@@ -35,7 +38,7 @@ pub enum ExecuteMsg {
         claim_recipient_address: Option<String>,
     },
     ClaimRewards {
-        max_period: u64,
+        periods: u64,
         token_id: String,
         claim_recipient_address: Option<String>,
     },
@@ -46,6 +49,7 @@ pub enum ExecuteMsg {
 pub enum QueryMsg {
     GetConfig {},
     GetRewardsSchedule {},
+    GetMaxComputePeriod {},
     StartTime {},
     Disable {},
     TotalRewardsPool {},
@@ -58,7 +62,7 @@ pub enum QueryMsg {
         token_id: String,
     },
     EstimateRewards {
-        max_period: u64,
+        periods: u64,
         staker: String,
         token_id: String,
     },
@@ -103,6 +107,11 @@ pub struct UpdateHistoriesResponse {
 pub struct RewardsScheduleResponse {
     pub rewards_per_cycle: u128,
     pub res_msg: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct MaxComputePeriodResponse {
+    pub max_compute_period: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

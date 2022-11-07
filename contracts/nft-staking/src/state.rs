@@ -49,3 +49,4 @@ pub const STAKER_HISTORIES: Map<String, Vec<Snapshot>> = Map::new("staker_histor
 pub const NEXT_CLAIMS: Map<String, NextClaim> = Map::new("next_claims");
 pub const TOKEN_INFOS: Map<String, TokenInfo> = Map::new("token_infos");
 pub const NUMBER_OF_STAKED_NFTS: Item<u128> = Item::new("number_of_staked_nfts");
+pub const MAX_COMPUTE_PERIOD: Item<u64> = Item::new("max_compute_period");

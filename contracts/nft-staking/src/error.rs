@@ -91,4 +91,13 @@ pub enum ContractError {
 
     #[error("rewards pool is empty")]
     EmptyRewardsPool {},
+
+    #[error("request claimable periods value for rewards is invalid, request periods: {periods} is bigger than max period: {max_compute_period}")]
+    InvalidMaxPeriod {
+        periods: u64,
+        max_compute_period: u64,
+    },
+
+    #[error("invalid set max_compute_period, need bigger than zero")]
+    InvalidSetMaxPeriod {},
 }

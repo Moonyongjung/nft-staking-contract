@@ -48,6 +48,8 @@ Through executing functions are `add_rewards_for_period` and `add_rewards_pool`,
 ### Claiming
 Rewards can be claimed at any moment by the stakers if they already accumulated some again. Claims are computed by periods, summing up the gains over the schedule, starting from the last unclaimed up until the previous period relative to now. This means that at least one period must elapse before the accumulated rewards for staking an NFT, in any given period, can be claimed. Or in other words, a staker can claim rewards once per payout period. If a staker stakes multi NFT, each NFT is managed by `staker_tokenid_key` which is key, mapping staker address and NFT token ID. So, staker is able to claim rewards about each NFT. 
 
+The `NFT staking contract` has parameter is `max_compute_period`. The contract needs to avoid restriction about query gas limit of WASM module. A staker who attemps unstaking, claiming and estimating rewards should send the message includes `periods` parameter is less than `max_compute_period`. 
+
 ### Snapshots
 Snapshots are historical records of changes staked/unstated over time. For every cycle in which an NFT is staked or unstaked, a new snapshot is created. This provides a means for calculating a staker's entitled proportion of rewards for every cycle of a period that they are claiming. A snapshot history for each `staker_tokenid_key` to track stake changes.
 

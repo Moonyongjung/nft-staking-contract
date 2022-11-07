@@ -8,7 +8,7 @@ use cw721::Cw721ReceiveMsg;
 use crate::error::{ContractError};
 use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, check_staker, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, contract_info, manage_number_nfts};
 use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
-use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS};
+use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "nft-staking";
@@ -45,6 +45,7 @@ pub fn instantiate(
     TOTAL_REWARDS_POOL.save(deps.storage, &0)?;
     DISABLE.save(deps.storage, &false)?;
     NUMBER_OF_STAKED_NFTS.save(deps.storage, &0)?;
+    MAX_COMPUTE_PERIOD.save(deps.storage, &2500)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -69,6 +70,7 @@ pub fn execute(
         ExecuteMsg::SetConfig(msg) => set_config(deps, info, config, msg),
         ExecuteMsg::AddRewardsForPeriods { rewards_per_cycle } => add_rewards_for_periods(deps, env, info, rewards_per_cycle, config),
         ExecuteMsg::Receive (msg) => add_rewards_pool(deps, info, env, config, msg),
+        ExecuteMsg::SetMaxComputePeriod { new_max_compute_period } => set_max_compute_period(deps, new_max_compute_period),
         ExecuteMsg::Start {} => start(deps, info, env, config),
         ExecuteMsg::Disable {} => disable(deps, info, config),
         ExecuteMsg::Enable {} => enable(deps, info, config),
@@ -76,7 +78,7 @@ pub fn execute(
         ExecuteMsg::WithdrawAllRewardsPool {} => withdraw_all_rewards_pool(deps, info, env, config),
         ExecuteMsg::ReceiveNft(msg) => stake_nft(deps, env, info, config, msg),
         ExecuteMsg::UnstakeNft { token_id, claim_recipient_address } => unstake_nft(deps, env, info, config, token_id, claim_recipient_address),
-        ExecuteMsg::ClaimRewards { max_period, token_id, claim_recipient_address } => claim_rewards(deps, info, env, max_period, token_id, config, claim_recipient_address),
+        ExecuteMsg::ClaimRewards { periods, token_id, claim_recipient_address } => claim_rewards(deps, info, env, periods, token_id, config, claim_recipient_address),
     }
 }
 
@@ -178,6 +180,26 @@ pub fn add_rewards_pool (
         .add_attribute("method", "add_rewards_pool")
         .add_attribute("added_rewards", msg.amount.to_string())
         .add_attribute("total_rewards", rewards.to_string())
+    )
+}
+
+// change max_compute_period that default value is 2500.
+// nft staking contract needs max_compute_period to avoid restriction about query gas limit of wasmd(defaultSmartQueryGasLimit is 3,000,000).  
+pub fn set_max_compute_period (
+    deps: DepsMut,
+    new_max_compute_period: u64,
+) -> Result<Response, ContractError> {
+    if new_max_compute_period <= 0 {
+        return Err(ContractError::InvalidSetMaxPeriod {})
+    }
+
+    let previous_max_compute_period = MAX_COMPUTE_PERIOD.load(deps.storage)?;
+    MAX_COMPUTE_PERIOD.save(deps.storage, &new_max_compute_period)?;
+
+    Ok(Response::new()
+        .add_attribute("method", "set_max_compute_period")
+        .add_attribute("previous_max_compute_period", previous_max_compute_period.to_string())
+        .add_attribute("new_max_compute_period", new_max_compute_period.to_string())
     )
 }
 
@@ -464,7 +486,7 @@ pub fn claim_rewards(
     mut deps: DepsMut,
     info: MessageInfo,
     env: Env,
-    max_period: u64,
+    periods: u64,
     token_id: String,
     config: Config,
     claim_recipient_address: Option<String>,
@@ -484,7 +506,7 @@ pub fn claim_rewards(
     let now = env.block.time.seconds();
     let claim: Claim;
     let new_next_claim: NextClaim;
-    let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), max_period, now, start_timestamp, config.clone());
+    let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), periods, now, start_timestamp, config.clone());
     match compute_rewards {
         Ok(t) => {
             claim = t.0;
@@ -565,7 +587,7 @@ mod tests{
     use cw20_base::{msg::InstantiateMsg as Cw20InstantiateMsg};
     use crate::execute::add_rewards_pool;
     use crate::handler::{get_cycle, update_histories, IS_STAKED, get_period, check_start_timestamp, check_disable, staker_tokenid_key, get_current_period, snapshot_init, execute_token_contract_transfer};
-    use crate::state::{Config, CONFIG_STATE, TOTAL_REWARDS_POOL, REWARDS_SCHEDULE, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, Claim, STAKER_HISTORIES, Snapshot};
+    use crate::state::{Config, CONFIG_STATE, TOTAL_REWARDS_POOL, REWARDS_SCHEDULE, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, Claim, STAKER_HISTORIES, Snapshot, MAX_COMPUTE_PERIOD};
     use crate::error::ContractError;
 
     use super::{add_rewards_for_periods, start};
@@ -592,6 +614,7 @@ mod tests{
         CONFIG_STATE.save(deps.storage, &config_state).unwrap();
         TOTAL_REWARDS_POOL.save(deps.storage, &0).unwrap();
         DISABLE.save(deps.storage, &false).unwrap();
+        MAX_COMPUTE_PERIOD.save(deps.storage, &2500).unwrap();
     }
 
     fn get_config(
@@ -921,18 +944,18 @@ mod tests{
         stake_function(deps.as_mut(), info.clone(), env.clone(), timestamp, cw721_contract_address.clone(), config.clone(), staker.clone(), token_id.clone());
 
         let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
-        let max_period = 1000;
+        let periods = 1000;
 
         // in config, 1 period is 180 sec
         let now = env.block.time.seconds() + 180;
         let start_timestamp = check_start_timestamp(deps.as_mut()).unwrap();
 
         // compute rewards
-        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), max_period.clone(), now.clone(), start_timestamp.clone(), config.clone());
+        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), periods.clone(), now.clone(), start_timestamp.clone(), config.clone());
 
         // comput rewards after 200 seconds
         let now = now + 200;
-        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), max_period.clone(), now.clone(), start_timestamp.clone(), config.clone());
+        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), periods.clone(), now.clone(), start_timestamp.clone(), config.clone());
 
         // unstake
         let timestamp = now + 1;
@@ -946,17 +969,20 @@ mod tests{
 
         // compute rewards after 180 seconds from re-stake
         let now = timestamp + 180;
-        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), max_period.clone(), now.clone(), start_timestamp.clone(), config.clone());
+        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), periods.clone(), now.clone(), start_timestamp.clone(), config.clone());
     }
 
     fn compute_rewards_function(
         mut deps: DepsMut,
         staker_tokenid_key: String,
-        max_period: u64,
+        periods: u64,
         now: u64,
         start_timestamp: u64,
         config: Config,
     ) -> (Claim, NextClaim) {
+
+        let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.storage).unwrap();
+        assert!(periods < max_compute_period);
 
         let mut claim = Claim {
             start_period: 0,
@@ -964,7 +990,7 @@ mod tests{
             amount: 0,
         };
     
-        assert_ne!(max_period, 0);
+        assert_ne!(periods, 0);
 
         let mut next_claim = NEXT_CLAIMS.may_load(deps.branch().storage, staker_tokenid_key.clone()).unwrap().unwrap();
         claim.start_period = next_claim.period;
@@ -993,8 +1019,8 @@ mod tests{
         }
     
         claim.periods = end_claim_period - next_claim.period;
-        if max_period < claim.periods {
-            claim.periods = max_period;
+        if periods < claim.periods {
+            claim.periods = periods;
         }
     
         let end_claim_period = next_claim.period + claim.periods;
@@ -1046,7 +1072,7 @@ mod tests{
         mut deps: DepsMut,
         info: MessageInfo,
         _env: Env,
-        max_period: u64,
+        periods: u64,
         token_id: String,
         config: Config,
         timestamp: u64,
@@ -1063,7 +1089,7 @@ mod tests{
         let next_claim = next_claim.unwrap();
         let now = timestamp;
 
-        let compute_rewards = compute_rewards_function(deps.branch(), staker_tokenid_key.clone(), max_period, now, start_timestamp, config.clone());
+        let compute_rewards = compute_rewards_function(deps.branch(), staker_tokenid_key.clone(), periods, now, start_timestamp, config.clone());
 
         let claim = compute_rewards.0;
         let new_next_claim = compute_rewards.1;

@@ -6,8 +6,8 @@ use cw721::{Cw721QueryMsg, AllNftInfoResponse, OwnerOfResponse, NftInfoResponse,
 use cw721_base::Extension;
 use crate::ContractError;
 use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance};
-use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse};
-use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, Snapshot, STAKER_HISTORIES, TokenInfo, TOKEN_INFOS, Claim, NEXT_CLAIMS, NextClaim, NUMBER_OF_STAKED_NFTS};
+use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse};
+use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, Snapshot, STAKER_HISTORIES, TokenInfo, TOKEN_INFOS, Claim, NEXT_CLAIMS, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD};
 
 const SUCCESS: &str = "success";
 
@@ -20,13 +20,14 @@ pub fn query(
     match msg {
         QueryMsg::GetConfig {} => to_binary(&get_config(deps)?),
         QueryMsg::GetRewardsSchedule {} => to_binary(&get_rewards_schedule(deps)?),
+        QueryMsg::GetMaxComputePeriod {} => to_binary(&get_max_compute_period(deps)?),
         QueryMsg::StartTime {} => to_binary(&start_time(deps, env)?),
         QueryMsg::Disable {} => to_binary(&disable(deps)?),
         QueryMsg::TotalRewardsPool {} => to_binary(&total_rewards_pool(deps)?),
         QueryMsg::WithdrawRewardsPoolAmount {} => to_binary(&withdraw_rewards_pool_amount(deps, env)?),
         QueryMsg::StakerHistory { staker, token_id } => to_binary(&staker_history(deps, staker, token_id)?),
         QueryMsg::TokenInfo { token_id } => to_binary(&token_infos(deps, token_id)?),
-        QueryMsg::EstimateRewards { max_period, staker, token_id } => to_binary(&estimate_rewards(deps, env, max_period, token_id, staker)?),
+        QueryMsg::EstimateRewards { periods, staker, token_id } => to_binary(&estimate_rewards(deps, env, periods, token_id, staker)?),
         QueryMsg::NextClaim { staker, token_id } => to_binary(&next_claims(deps, staker, token_id)?),
         QueryMsg::NumberOfStakedNfts {} => to_binary(&number_of_staked_nfts(deps)?),
         QueryMsg::StakedAllNftInfo { token_id } => to_binary(&staked_all_nft_info(deps, token_id)?),
@@ -63,6 +64,18 @@ fn get_rewards_schedule(
             res_msg: ContractError::NoneRewardsSchedule {}.to_string()
         };
     }
+
+    Ok(res)
+}
+
+fn get_max_compute_period(
+    deps: Deps,
+) -> StdResult<MaxComputePeriodResponse> {
+    let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.storage)?;
+
+    let res = MaxComputePeriodResponse {
+        max_compute_period: max_compute_period,
+    };
 
     Ok(res)
 }
@@ -279,7 +292,7 @@ fn token_infos (
 pub fn estimate_rewards(
     deps: Deps,
     env: Env,
-    max_period: u64,
+    periods: u64,
     token_id: String,
     staker: String,
 ) -> StdResult<EstimateRewardsResponse> {
@@ -321,7 +334,7 @@ pub fn estimate_rewards(
     let now = env.block.time.seconds();
 
     let claim: Claim;
-    let compute_rewards = compute_rewards(deps, staker_tokenid_key.clone(), max_period, now, start_timestamp.unwrap(), config.clone());
+    let compute_rewards = compute_rewards(deps, staker_tokenid_key.clone(), periods, now, start_timestamp.unwrap(), config.clone());
     match compute_rewards {
         Ok(t) => {
             claim = t.0;
