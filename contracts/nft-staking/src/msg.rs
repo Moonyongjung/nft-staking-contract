@@ -110,6 +110,7 @@ pub struct RewardsScheduleResponse {
 pub struct StartTimeResponse {
     pub start: bool,
     pub start_time : u64,
+    pub now_time: u64,
     pub res_msg: String,
 }
 

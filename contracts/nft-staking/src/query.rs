@@ -20,7 +20,7 @@ pub fn query(
     match msg {
         QueryMsg::GetConfig {} => to_binary(&get_config(deps)?),
         QueryMsg::GetRewardsSchedule {} => to_binary(&get_rewards_schedule(deps)?),
-        QueryMsg::StartTime {} => to_binary(&start_time(deps)?),
+        QueryMsg::StartTime {} => to_binary(&start_time(deps, env)?),
         QueryMsg::Disable {} => to_binary(&disable(deps)?),
         QueryMsg::TotalRewardsPool {} => to_binary(&total_rewards_pool(deps)?),
         QueryMsg::WithdrawRewardsPoolAmount {} => to_binary(&withdraw_rewards_pool_amount(deps, env)?),
@@ -33,6 +33,7 @@ pub fn query(
     }
 }
 
+// query configuration.
 fn get_config(deps: Deps) -> StdResult<ConfigResponse> {
     let config_state = CONFIG_STATE.load(deps.storage)?;
     Ok(ConfigResponse { 
@@ -44,6 +45,7 @@ fn get_config(deps: Deps) -> StdResult<ConfigResponse> {
     })
 }
 
+// get rewards schedule includes rewards per cycle.
 fn get_rewards_schedule(
     deps: Deps
 ) -> StdResult<RewardsScheduleResponse> {
@@ -65,11 +67,14 @@ fn get_rewards_schedule(
     Ok(res)
 }
 
+// get start time after nft staking contract runs start func.
 fn start_time(
     deps: Deps,
+    env: Env,
 ) -> StdResult<StartTimeResponse> {
     let start_bool: bool;
     let start_time: u64;
+    let now_time = env.block.time.seconds();
     let res_msg: String;
 
     let start_timestamp = START_TIMESTAMP.may_load(deps.storage)?;
@@ -86,12 +91,14 @@ fn start_time(
     let res = StartTimeResponse {
         start: start_bool,
         start_time: start_time,
+        now_time: now_time,
         res_msg: res_msg
     };
 
     Ok(res)
 }
 
+// get disable state.
 fn disable(
     deps: Deps,
 ) -> StdResult<DisableResponse> {
@@ -117,6 +124,7 @@ fn disable(
     Ok(res)
 }
 
+// get total supplied rewards pool.
 fn total_rewards_pool (
     deps: Deps,
 ) -> StdResult<TotalRewardsPoolResponse> {
@@ -140,6 +148,7 @@ fn total_rewards_pool (
     Ok(res)
 }
 
+// get current amounts withdrawal rewards pool.
 fn withdraw_rewards_pool_amount (
     deps: Deps,
     env: Env,
@@ -169,6 +178,7 @@ fn withdraw_rewards_pool_amount (
     Ok(res)
 }
 
+// get next claims state of staker_tokenid_key.
 fn next_claims(
     deps: Deps,
     staker: String,
@@ -198,6 +208,7 @@ fn next_claims(
     Ok(res)
 }
 
+// get staker history.
 fn staker_history (
     deps: Deps,
     staker: String,
@@ -227,6 +238,7 @@ fn staker_history (
     Ok(res)
 }
 
+// get token infos retrieved by token ID.
 fn token_infos (
     deps: Deps,
     token_id: String,
@@ -263,6 +275,7 @@ fn token_infos (
     Ok(res)
 }
 
+// get calculated current rewards of staker_tokenid_key.
 pub fn estimate_rewards(
     deps: Deps,
     env: Env,
@@ -330,6 +343,7 @@ pub fn estimate_rewards(
     })
 }
 
+// get the number of staked nfts in the nft staking contract.
 fn number_of_staked_nfts(
     deps: Deps,
 ) -> StdResult<NumberOfStakedNftsResponse> {
@@ -349,6 +363,7 @@ fn number_of_staked_nfts(
     })
 }
 
+// get staked nfts info by querying AllNftInfo of whitelisted nft contract.
 fn staked_all_nft_info(
     deps: Deps,
     token_id: String,

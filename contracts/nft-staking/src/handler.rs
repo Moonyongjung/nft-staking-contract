@@ -424,6 +424,7 @@ pub fn snapshot_init() -> Result<Snapshot, ContractError> {
     Ok(snapshot)
 }
 
+// manage the number of staked nfts which nft staking contract owns.
 pub fn manage_number_nfts(
     deps: DepsMut,
     is_increase: bool,
