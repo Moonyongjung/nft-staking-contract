@@ -1,4 +1,4 @@
-use std::{ops::Add, str::FromStr};
+use std::{ops::Add};
 
 use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps, Coin};
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
@@ -52,7 +52,7 @@ pub fn get_cycle(
     if timestamp < start_timestamp {
         return Err(ContractError::TimestampPreceesContractStart {})
     }
-
+    
     Ok((timestamp - start_timestamp) / config.cycle_length_in_seconds + 1)
 }
 
@@ -64,7 +64,7 @@ pub fn is_valid_cycle_length(
     if cycle_length_in_seconds < MIN_CYCLE_LENGTH {
         return Err(ContractError::CycleLengthInvalid { 
             min_cycle_length: MIN_CYCLE_LENGTH,
-            cycle_length_in_seconds: cycle_length_in_seconds 
+            cycle_length_in_seconds 
         })
     } else {
         let res = true;
@@ -80,7 +80,7 @@ pub fn is_valid_period_length(
     if period_length_in_cycles < MIN_PERIOD {
         return Err(ContractError::PeriodLengthInvalid { 
             min_period: MIN_PERIOD,
-            period_length_in_cycles: period_length_in_cycles 
+            period_length_in_cycles 
         })
     } else {
         let res = true;
@@ -94,10 +94,7 @@ pub fn contract_info(
 ) -> Result<MessageInfo, ()>{
     let contract_owner_info = MessageInfo {
         sender: Addr::unchecked(msg.sender.clone()),
-        funds: [Coin{
-            denom: "".to_string(),
-            amount: Uint128::from_str("0").unwrap(),
-        }].to_vec(),
+        funds: [Coin::default()].to_vec(),
     }; 
 
     Ok(contract_owner_info)
@@ -182,7 +179,7 @@ pub fn execute_token_contract_transfer(
     let transfer_from: CosmosMsg = CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: rewards_token_contract.to_string(),
         msg: to_binary(&Cw20ExecuteMsg::Transfer { 
-            recipient: recipient, 
+            recipient, 
             amount:  u128_amount,
         })?,
         funds: vec![]
@@ -204,7 +201,7 @@ pub fn execute_transfer_nft_unstake(
         contract_addr: nft_contract,
         msg: to_binary(&Cw721ExecuteMsg::TransferNft { 
             recipient: staker, 
-            token_id: token_id, 
+            token_id, 
         })?,
         funds: vec![]
     });
@@ -223,7 +220,7 @@ pub fn query_rewards_token_balance(
     let balance_response: BalanceResponse = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart{
         contract_addr: rewards_token_contract,
         msg: to_binary(&Cw20QueryMsg::Balance { 
-            address: address 
+            address 
         })?,
     }))?;
 
@@ -243,7 +240,7 @@ pub fn update_histories(
 
     let update_histories_res = UpdateHistoriesResponse {
         staker: staker_tokenid_key,
-        current_cycle: current_cycle,
+        current_cycle,
         staker_histories_stake: staker_snapshot.is_staked,
     };
 
@@ -270,7 +267,7 @@ pub fn update_staker_history(
         if snapshot.start_cycle == current_cycle {
             // update the snapshot if it starts on the current cycle.
             let new_snapshot = Snapshot {
-                is_staked: is_staked,
+                is_staked,
                 start_cycle: current_cycle,
             };
 
@@ -282,7 +279,7 @@ pub fn update_staker_history(
     }
 
     let new_snapshot = Snapshot {
-        is_staked: is_staked,
+        is_staked,
         start_cycle: current_cycle,
     };
 
@@ -308,19 +305,11 @@ pub fn compute_rewards(
     if periods > max_compute_period {
         return Err(ContractError::InvalidMaxPeriod { 
             periods: periods, 
-            max_compute_period: max_compute_period, 
+            max_compute_period, 
         })
     }
-    let mut claim = Claim {
-        start_period: 0,
-        periods: 0,
-        amount: 0,
-    };
-
-    let mut next_claim = NextClaim {
-        period: 0,
-        staker_snapshot_index: 0,
-    };
+    let mut claim = Claim::default();
+    let mut next_claim = NextClaim::default();
 
     // computing 0 periods.
     if periods == 0 {
@@ -351,7 +340,7 @@ pub fn compute_rewards(
         start_cycle: s_state_data.start_cycle,
     };
 
-    let mut next_staker_snapshot = snapshot_init().unwrap();
+    let mut next_staker_snapshot = Snapshot::default();
     if next_claim.staker_snapshot_index != staker_history.clone().len() as u64 - 1 {
         let s_data = &staker_history.clone()[(next_claim.staker_snapshot_index + 1) as usize];
         next_staker_snapshot = Snapshot {
@@ -407,10 +396,7 @@ pub fn compute_rewards(
                 if next_claim.staker_snapshot_index != (staker_history.len() - 1) as u64 {
                     next_staker_snapshot = staker_history[(next_claim.staker_snapshot_index + 1) as usize];
                 } else {
-                    next_staker_snapshot = Snapshot {
-                        is_staked: false,
-                        start_cycle: 0,
-                    }
+                    next_staker_snapshot = Snapshot::default();
                 }
             } 
         }
@@ -419,15 +405,6 @@ pub fn compute_rewards(
 
     Ok((claim, next_claim))
 
-}
-
-// snapshot init
-pub fn snapshot_init() -> Result<Snapshot, ContractError> {
-    let snapshot = Snapshot {
-        is_staked: false,
-        start_cycle: 0,
-    };
-    Ok(snapshot)
 }
 
 // manage the number of staked nfts which nft staking contract owns.

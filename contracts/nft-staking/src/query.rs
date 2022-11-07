@@ -1,12 +1,12 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, Binary, Env, StdResult, Deps, QueryRequest, WasmQuery, StdError};
+use cosmwasm_std::{to_binary, Binary, Env, StdResult, Deps, QueryRequest, WasmQuery, StdError, Order};
 use cw20::Expiration;
 use cw721::{Cw721QueryMsg, AllNftInfoResponse, OwnerOfResponse, NftInfoResponse, Approval};
 use cw721_base::Extension;
 use crate::ContractError;
 use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance};
-use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse};
+use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse, StakedNftsByOwnerResponse, TokenInfoMsg};
 use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, Snapshot, STAKER_HISTORIES, TokenInfo, TOKEN_INFOS, Claim, NEXT_CLAIMS, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD};
 
 const SUCCESS: &str = "success";
@@ -74,7 +74,7 @@ fn get_max_compute_period(
     let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.storage)?;
 
     let res = MaxComputePeriodResponse {
-        max_compute_period: max_compute_period,
+        max_compute_period,
     };
 
     Ok(res)
@@ -103,9 +103,9 @@ fn start_time(
 
     let res = StartTimeResponse {
         start: start_bool,
-        start_time: start_time,
-        now_time: now_time,
-        res_msg: res_msg
+        start_time,
+        now_time,
+        res_msg
     };
 
     Ok(res)
@@ -131,7 +131,7 @@ fn disable(
 
     let res = DisableResponse {
         disable: disable_state,
-        res_msg: res_msg,
+        res_msg,
     };
 
     Ok(res)
@@ -155,7 +155,7 @@ fn total_rewards_pool (
 
     let res = TotalRewardsPoolResponse {
         total_rewards_pool: pool,
-        res_msg: res_msg
+        res_msg
     };
 
     Ok(res)
@@ -184,8 +184,8 @@ fn withdraw_rewards_pool_amount (
     }
 
     let res = WithdrawRewardsPoolResponse {
-        withdraw_rewards_pool_amount: withdraw_rewards_pool_amount,
-        res_msg: res_msg,
+        withdraw_rewards_pool_amount,
+        res_msg,
     };
 
     Ok(res)
@@ -203,10 +203,7 @@ fn next_claims(
     let next_claim: NextClaim;
     let next_claims = NEXT_CLAIMS.may_load(deps.storage, staker_tokenid_key)?;
     if next_claims.is_none() {
-        next_claim = NextClaim {
-            period: 0,
-            staker_snapshot_index: 0,
-        };
+        next_claim = NextClaim::default();
         res_msg = ContractError::EmptyNextClaim {}.to_string()
     } else {
         next_claim = next_claims.unwrap();
@@ -214,8 +211,8 @@ fn next_claims(
     }
 
     let res = NextClaimResponse {
-        next_claim: next_claim,
-        res_msg: res_msg,
+        next_claim,
+        res_msg,
     };
 
     Ok(res)
@@ -243,9 +240,9 @@ fn staker_history (
     }
 
     let res = StakerHistoryResponse {
-        staker_tokenid_key: staker_tokenid_key,
+        staker_tokenid_key,
         staker_history: history,
-        res_msg: res_msg,
+        res_msg,
     };
 
     Ok(res)
@@ -270,19 +267,14 @@ fn token_infos (
             res_msg = ContractError::UnstakedTokenId {}.to_string();
         }
     } else {
-        token_info = TokenInfo {
-            owner: "".to_string(),
-            is_staked: false,
-            deposit_cycle: 0,
-            withdraw_cycle: 0
-        };
+        token_info = TokenInfo::default();
         res_msg = ContractError::InvalidTokenId {}.to_string()
     }
 
     let res = TokenInfosResponse {
-        token_id: token_id,
-        token_info: token_info,
-        res_msg: res_msg,
+        token_id,
+        token_info,
+        res_msg,
     };
 
     Ok(res)
@@ -296,11 +288,7 @@ pub fn estimate_rewards(
     token_id: String,
     staker: String,
 ) -> StdResult<EstimateRewardsResponse> {
-    let return_claim = Claim {
-        periods: 0,
-        start_period: 0,
-        amount: 0,
-    };
+    let return_claim = Claim::default();
 
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
     let next_claim = NEXT_CLAIMS.may_load(deps.storage, staker_tokenid_key.clone())?;
@@ -338,7 +326,6 @@ pub fn estimate_rewards(
     match compute_rewards {
         Ok(t) => {
             claim = t.0;
-
         },
         Err(e) => {
             return Ok(EstimateRewardsResponse { 
@@ -351,7 +338,7 @@ pub fn estimate_rewards(
 
     Ok(EstimateRewardsResponse { 
         req_staker_tokenid_key: staker_tokenid_key, 
-        claim: claim,
+        claim,
         res_msg: SUCCESS.to_string()
     })
 }
@@ -371,7 +358,7 @@ fn number_of_staked_nfts(
     let number_of_staked_nfts = NUMBER_OF_STAKED_NFTS.load(deps.storage)?;
 
     Ok(NumberOfStakedNftsResponse {
-        number_of_staked_nfts: number_of_staked_nfts,
+        number_of_staked_nfts,
         res_msg: SUCCESS.to_string(),
     })
 }
@@ -386,7 +373,7 @@ fn staked_all_nft_info(
     let all_nft_info: Result<AllNftInfoResponse::<Extension>, StdError>  = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart{
         contract_addr: config.white_listed_nft_contract,
         msg: to_binary(&Cw721QueryMsg::AllNftInfo { 
-            token_id: token_id, 
+            token_id, 
             include_expired: Some(true),
         })?,
     }));
@@ -427,4 +414,44 @@ fn staked_all_nft_info(
             Ok(staked_all_nft_info) 
         }            
     }
+}
+
+pub fn staked_nfts_by_owner(
+    deps: Deps,
+    staker: String,
+) -> StdResult<StakedNftsByOwnerResponse> {
+
+    let token_infos: StdResult<Vec<_>> = TOKEN_INFOS.range(deps.storage, None, None, Order::Ascending).collect();
+    match token_infos {
+        Ok(t) => {
+            let mut staked_nfts: Vec<TokenInfoMsg> = vec![];
+            for token_info in t {
+                if token_info.1.owner == staker {
+                    let info = TokenInfoMsg {
+                        token_id: token_info.0,
+                        token_info: token_info.1,
+                    };
+                    staked_nfts.append(&mut vec![info])
+                }
+            }
+
+            let res = StakedNftsByOwnerResponse {
+                staked_nfts,
+                res_msg:SUCCESS.to_string(),
+            };
+
+            Ok(res)
+        },
+        Err(e) => {
+            let empty_response = vec![TokenInfoMsg::default()];
+            let res = StakedNftsByOwnerResponse {
+                staked_nfts: empty_response,
+                res_msg:e.to_string(),
+            };
+
+            Ok(res)
+        }
+    }
+
+    
 }

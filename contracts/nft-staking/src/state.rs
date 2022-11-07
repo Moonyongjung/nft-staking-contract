@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +21,12 @@ pub struct Snapshot {
     pub start_cycle: u64,
 }
 
+impl Default for Snapshot {
+    fn default() -> Self {
+        Snapshot { is_staked: false, start_cycle: 0 }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct TokenInfo {
     pub owner: String,
@@ -27,10 +35,30 @@ pub struct TokenInfo {
     pub withdraw_cycle: u64,
 }
 
+impl Default for TokenInfo {
+    fn default() -> Self {
+        TokenInfo { 
+            owner: String::from_str("").unwrap(), 
+            is_staked: false, 
+            deposit_cycle: 0, 
+            withdraw_cycle: 0
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct NextClaim {
     pub period: u64,
     pub staker_snapshot_index: u64,
+}
+
+impl Default for NextClaim {
+    fn default() -> Self {
+        NextClaim { 
+            period: 0,
+            staker_snapshot_index: 0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -38,6 +66,12 @@ pub struct Claim {
     pub start_period: u64,
     pub periods: u64,
     pub amount: u128,
+}
+
+impl Default for Claim {
+    fn default() -> Self {
+        Claim { start_period: 0, periods: 0, amount: 0 }
+    }
 }
 
 pub const CONFIG_STATE: Item<Config> = Item::new("config");

@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use cw20::Cw20ReceiveMsg;
 use cw721::{Cw721ReceiveMsg, AllNftInfoResponse};
 use schemars::JsonSchema;
@@ -76,6 +78,7 @@ pub enum QueryMsg {
     }
 }
 
+// msgs
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct SetConfigMsg {
@@ -85,6 +88,23 @@ pub struct SetConfigMsg {
     pub rewards_token_contract: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct TokenInfoMsg {
+    pub token_id: String,
+    pub token_info: TokenInfo,
+}
+
+impl Default for TokenInfoMsg {
+    fn default() -> Self {
+        TokenInfoMsg { 
+            token_id: String::from_str("").unwrap(), 
+            token_info: TokenInfo::default() 
+        }
+    }
+}
+
+// responses
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ConfigResponse {
@@ -186,6 +206,13 @@ pub struct NumberOfStakedNftsResponse {
 #[serde(rename_all = "snake_case")]
 pub struct StakedAllNftInfoResponse<T> {
     pub all_nft_info: AllNftInfoResponse<T>,
+    pub res_msg: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct StakedNftsByOwnerResponse {
+    pub staked_nfts: Vec<TokenInfoMsg>,
     pub res_msg: String,
 }
 
