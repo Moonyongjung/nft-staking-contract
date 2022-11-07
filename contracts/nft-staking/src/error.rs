@@ -83,6 +83,12 @@ pub enum ContractError {
     #[error("have no amout for claim")]
     NoAmountClaim {},
 
+    #[error("rewards pool is insufficient to claim, rewards pool balance is {rewards_pool_balance} and claim amount is {claim_amount}")]
+    InsufficientRewardsPool {
+        rewards_pool_balance: u128,
+        claim_amount: u128,
+    },
+
     #[error("have not history")]
     HaveNotHistory {},
 

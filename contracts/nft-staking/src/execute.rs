@@ -517,6 +517,17 @@ pub fn claim_rewards(
         }
     }
 
+    let contract_address = env.contract.address.to_string();
+
+    // nft staking contract balances
+    let balance_response = query_rewards_token_balance(deps.as_ref(), contract_address.clone(), config.rewards_token_contract.clone())?;
+    if balance_response.balance.u128() < claim.amount {
+        return Err(ContractError::InsufficientRewardsPool { 
+            rewards_pool_balance: balance_response.balance.u128(), 
+            claim_amount: claim.amount, 
+        })
+    }
+
     // free up memory on already processed staker snapshots.
     let staker_history = STAKER_HISTORIES.may_load(deps.storage, staker_tokenid_key.clone())?;
     if staker_history.is_none() {
