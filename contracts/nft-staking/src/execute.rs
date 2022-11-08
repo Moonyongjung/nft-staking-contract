@@ -1,14 +1,16 @@
+use std::str::FromStr;
+
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response};
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
 use cw2::set_contract_version;
-use cw20::{Cw20ReceiveMsg};
+use cw20::{Cw20ReceiveMsg, Expiration};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
-use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, contract_info, manage_number_nfts};
+use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, _contract_info, check_contract_owner_only};
 use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
-use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD};
+use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "nft-staking";
@@ -67,29 +69,33 @@ pub fn execute(
     let config = CONFIG_STATE.load(deps.storage)?;
     
     match msg {
-        ExecuteMsg::SetConfig(msg) => set_config(deps, info, config, msg),
+        ExecuteMsg::SetConfig(msg) => set_config(deps, info, env, config, msg),
+        ExecuteMsg::Grant { address, expires } => grant(deps, info, config, address, expires),
+        ExecuteMsg::Revoke { address } => revoke(deps, info, config, address),
         ExecuteMsg::AddRewardsForPeriods { rewards_per_cycle } => add_rewards_for_periods(deps, env, info, rewards_per_cycle, config),
         ExecuteMsg::Receive (msg) => add_rewards_pool(deps, info, env, config, msg),
-        ExecuteMsg::SetMaxComputePeriod { new_max_compute_period } => set_max_compute_period(deps, info, new_max_compute_period, config),
+        ExecuteMsg::SetMaxComputePeriod { new_max_compute_period } => set_max_compute_period(deps, info, env, new_max_compute_period, config),
         ExecuteMsg::Start {} => start(deps, info, env, config),
-        ExecuteMsg::Disable {} => disable(deps, info, config),
-        ExecuteMsg::Enable {} => enable(deps, info, config),
-        ExecuteMsg::WithdrawRewardsPool { amount } => withdraw_rewards_pool(deps, info, config, amount),
+        ExecuteMsg::Disable {} => disable(deps, info, env, config),
+        ExecuteMsg::Enable {} => enable(deps, info, env, config),
+        ExecuteMsg::WithdrawRewardsPool { amount } => withdraw_rewards_pool(deps, info, env, config, amount),
         ExecuteMsg::WithdrawAllRewardsPool {} => withdraw_all_rewards_pool(deps, info, env, config),
         ExecuteMsg::ReceiveNft(msg) => stake_nft(deps, env, info, config, msg),
         ExecuteMsg::UnstakeNft { token_id, claim_recipient_address } => unstake_nft(deps, env, info, config, token_id, claim_recipient_address),
         ExecuteMsg::ClaimRewards { periods, token_id, claim_recipient_address } => claim_rewards(deps, info, env, periods, token_id, config, claim_recipient_address),
+
     }
 }
 
 // change configuration.
 pub fn set_config(
-    deps: DepsMut,
+    mut deps: DepsMut,
     info: MessageInfo,
+    env: Env,
     config: Config,
     msg: SetConfigMsg,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
     let mut cycle_length_in_seconds = config.clone().cycle_length_in_seconds;
     let mut period_length_in_cycles = config.clone().period_length_in_cycles;
@@ -128,18 +134,64 @@ pub fn set_config(
     )
 }
 
+// grant other account which it will be given a role of contract owner.
+pub fn grant(
+    deps: DepsMut,
+    info: MessageInfo,
+    config: Config,
+    address: String,
+    expires: Option<Expiration>
+) -> Result<Response, ContractError> {
+    check_contract_owner_only(info.clone(), config.clone())?;
+
+    let grants = GRANTS.may_load(deps.storage, address.clone())?;
+    if grants.is_none() {
+        let grants_data = Grant::new(address.clone(), expires);
+        GRANTS.save(deps.storage, address.clone(), &grants_data)?;
+    } else {
+        return Err(ContractError::AlreadyGranted { address: address.clone() })
+    }
+
+    Ok(Response::new()
+        .add_attribute("method", "grant")
+        .add_attribute("grant_address", address)
+    )
+}
+
+// revoke granted address.
+pub fn revoke(
+    deps: DepsMut,
+    info: MessageInfo,
+    config: Config,
+    address: String,
+) -> Result<Response, ContractError> {
+    check_contract_owner_only(info, config)?;
+
+    let grants = GRANTS.may_load(deps.storage, address.clone())?;
+    if grants.is_none() {
+        return Err(ContractError::InvalidGrantedAddress { address: address.clone() })
+    } else {
+        GRANTS.remove(deps.storage, address.clone())
+    }
+
+    Ok(Response::new()
+        .add_attribute("method", "revoke")
+        .add_attribute("revoke_address", address)
+    )
+}
+
 // set rewards schedule.
 // rewards per cycle can changed by executing add_rewards_for_periods even after start.
 // if rewards per cycle are replaced to new value of rewards per cycle, 
 // computing rewards are changed immediatly when staker claims rewards. 
 pub fn add_rewards_for_periods(
-    deps: DepsMut,
-    _env: Env,
+    mut deps: DepsMut,
+    env: Env,
     info: MessageInfo,
     rewards_per_cycle: u128,
     config: Config,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
     // rewards per cycle shoule be bigger than zero.
     if rewards_per_cycle <= 0 {
@@ -156,9 +208,9 @@ pub fn add_rewards_for_periods(
 // increase rewards pool.
 // nft staking contract requests to transfer rewards from contract instantiater, as contract owner, to nft staking contract.
 pub fn add_rewards_pool (
-    deps: DepsMut,
+    mut deps: DepsMut,
     info: MessageInfo,
-    _env: Env,
+    env: Env,
     config: Config,
     msg: Cw20ReceiveMsg,
 ) -> Result<Response, ContractError> {
@@ -169,7 +221,7 @@ pub fn add_rewards_pool (
         })
     }
 
-    check_contract_owner(contract_info(msg.clone()).unwrap(), config.clone())?;
+    check_contract_owner(deps.branch(), _contract_info(msg.clone()).unwrap(), env.clone(), config.clone())?;
 
     let total_rewards_pool = TOTAL_REWARDS_POOL.load(deps.storage)?;
     let rewards = total_rewards_pool + msg.amount.clone().u128();
@@ -180,18 +232,20 @@ pub fn add_rewards_pool (
         .add_attribute("method", "add_rewards_pool")
         .add_attribute("added_rewards", msg.amount.to_string())
         .add_attribute("total_rewards", rewards.to_string())
+        .add_attribute("send_from", info.sender)
     )
 }
 
 // change max_compute_period that default value is 2500.
 // nft staking contract needs max_compute_period to avoid restriction about query gas limit of wasmd(defaultSmartQueryGasLimit is 3,000,000).  
 pub fn set_max_compute_period (
-    deps: DepsMut,
+    mut deps: DepsMut,
     info: MessageInfo,
+    env: Env,
     new_max_compute_period: u64,
     config: Config,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info, config)?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
     if new_max_compute_period <= 0 {
         return Err(ContractError::InvalidSetMaxPeriod {})
     }
@@ -209,12 +263,12 @@ pub fn set_max_compute_period (
 // nft staking contract start.
 // every calculating period and cycle are affected by start timestamp.
 pub fn start(
-    deps: DepsMut,
+    mut deps: DepsMut,
     info: MessageInfo,
     env: Env,
     config: Config,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
     let start_timestamp = START_TIMESTAMP.may_load(deps.storage)?;
     if !start_timestamp.is_none() {
@@ -233,11 +287,12 @@ pub fn start(
 // nft staking contract halt.
 // after disabled, functions are stop.
 pub fn disable(
-    deps: DepsMut,
+    mut deps: DepsMut,
     info: MessageInfo,
+    env: Env,
     config: Config,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
     DISABLE.save(deps.storage, &true)?;
 
@@ -250,11 +305,12 @@ pub fn disable(
 // if the nft staking contract is disabled and the contract owner want to activate again, 
 // execute enable function.
 pub fn enable(
-    deps: DepsMut,
+    mut deps: DepsMut,
     info: MessageInfo,
+    env: Env,
     config: Config,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
     let disable = DISABLE.load(deps.storage)?;
     if !disable {
@@ -273,12 +329,13 @@ pub fn enable(
 // withdraw rewards pool.
 // the nft staking contract's balance of token rewards which is value of requested amount transfer to contract owner.
 pub fn withdraw_rewards_pool(
-    deps: DepsMut,
+    mut deps: DepsMut,
     info: MessageInfo,
+    env: Env,
     config: Config,
     amount: u128,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
     let disabled = check_disable(deps)?;
     let rewards_token_contract = config.clone().rewards_token_contract;
@@ -303,7 +360,7 @@ pub fn withdraw_all_rewards_pool(
     env: Env,
     config: Config,
 ) -> Result<Response, ContractError> {
-    check_contract_owner(info.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
     let disabled = check_disable(deps.branch())?;
     let rewards_token_contract = config.clone().rewards_token_contract;
@@ -336,16 +393,27 @@ pub fn stake_nft(
     config: Config,
     msg: Cw721ReceiveMsg,
 ) -> Result<Response, ContractError> {
+    // check empty total supply rewards pool.
     let total_rewards_pool = TOTAL_REWARDS_POOL.may_load(deps.branch().storage)?;
     if total_rewards_pool.is_none() {
         return Err(ContractError::EmptyRewardsPool {})
     }
 
+    // check empty rewards pool of nft staking contract.
+    let address = env.contract.address.to_string();
+    let rewards_token_contract = config.clone().rewards_token_contract;
+    let balance_response = query_rewards_token_balance(deps.as_ref(), address.clone(), rewards_token_contract.clone())?;
+    if balance_response.balance == Uint128::from_str("0").unwrap() {
+        return Err(ContractError::EmptyRewardsPool {})
+    }
+
+    // check rewards schedule.
     let rewards_schedule = REWARDS_SCHEDULE.may_load(deps.branch().storage)?;
     if rewards_schedule.is_none() {
         return Err(ContractError::NoneRewardsSchedule {})
     }
 
+    // check the nft must be sended from whitelisted nft contract.
     if info.sender.to_string() != config.clone().white_listed_nft_contract {
         return Err(ContractError::InvalidWhitelistedContract { 
             white_listed_contract: config.clone().white_listed_nft_contract, 

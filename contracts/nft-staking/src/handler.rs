@@ -1,10 +1,10 @@
 use std::{ops::Add};
 
-use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps, Coin};
+use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps, Coin, Env};
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
 use cw721::{Cw721ExecuteMsg};
 
-use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD}, ContractError, msg::{UpdateHistoriesMsg}};
+use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS}, ContractError, msg::{UpdateHistoriesMsg}};
 
 pub const IS_STAKED: bool = true;
 const MIN_CYCLE_LENGTH: u64 = 10;
@@ -89,7 +89,7 @@ pub fn is_valid_period_length(
 }
 
 // make contract message info.
-pub fn contract_info(
+pub fn _contract_info(
     msg: Cw20ReceiveMsg,
 ) -> Result<MessageInfo, ()>{
     let contract_owner_info = MessageInfo {
@@ -110,15 +110,34 @@ pub fn staker_tokenid_key(
 }
 
 // check message sender is contract owner.
-pub fn check_contract_owner(
-    info: MessageInfo,
+pub fn check_contract_owner_only (
+    info: MessageInfo, 
     config: Config,
 ) -> Result<bool, ContractError> {
-    if config.owner != info.sender{
-        return Err(ContractError::Unauthorized {});
+    if config.owner != info.sender.to_string() {
+        return Err(ContractError::Unauthorized {})
     }
 
     Ok(true)
+}
+
+// check message sender is contract owner or granted address.
+pub fn check_contract_owner(
+    deps: DepsMut,
+    info: MessageInfo,
+    env: Env,
+    config: Config,
+) -> Result<bool, ContractError> {
+    if config.owner == info.sender.to_string() {
+        return Ok(true)    
+    }
+
+    let grants = GRANTS.may_load(deps.storage, info.sender.to_string())?;
+    if !grants.is_none() && !grants.unwrap().expires.is_expired(&env.block) {
+        return Ok(true)
+    }
+
+    Err(ContractError::Unauthorized {})
 }
 
 // check the contract is started and return start timestamp.

@@ -1,13 +1,13 @@
 use std::str::FromStr;
 
 use cosmwasm_std::StdError;
-use cw20::Cw20ReceiveMsg;
+use cw20::{Cw20ReceiveMsg, Expiration};
 use cw721::{Cw721ReceiveMsg, AllNftInfoResponse};
 use cw721_base::Extension;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{state::{Snapshot, TokenInfo, Claim, NextClaim}, ContractError};
+use crate::{state::{Snapshot, TokenInfo, Claim, NextClaim, Grant}, ContractError};
 
 pub const SUCCESS: &str = "success";
 
@@ -24,6 +24,13 @@ pub struct InstantiateMsg {
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
     SetConfig(SetConfigMsg),
+    Grant {
+        address: String,
+        expires: Option<Expiration>
+    },
+    Revoke {
+        address: String,
+    },
     AddRewardsForPeriods {
         rewards_per_cycle: u128,
     },
@@ -54,6 +61,7 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     GetConfig {},
+    GetAllGrants {},
     GetRewardsSchedule {},
     GetMaxComputePeriod {},
     StartTime {},
@@ -129,6 +137,30 @@ pub struct ConfigResponse {
     pub period_length_in_cycles: u64,
     pub white_listed_nft_contract: String,
     pub rewards_token_contract: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct GetGrantsResponse {
+    pub grants: Vec<Grant>,
+    pub res_msg: String,
+}
+
+impl GetGrantsResponse {
+    pub fn new(
+        grants: Vec<Grant>
+    ) -> Self {
+        GetGrantsResponse { 
+            grants, 
+            res_msg: SUCCESS.to_string()
+        }
+    }
+
+    pub fn with_err(e: StdError) -> Self {
+        GetGrantsResponse { 
+            grants: vec![], 
+            res_msg: e.to_string()  
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

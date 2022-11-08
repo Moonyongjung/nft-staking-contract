@@ -6,7 +6,7 @@ pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
 
-    #[error("Unauthorized, owner and sender are not same")]
+    #[error("Unauthorized address")]
     Unauthorized {},
 
     #[error("cycle length is invalid, at least {min_cycle_length} seconds > request {cycle_length_in_seconds} seconds")]
@@ -106,4 +106,14 @@ pub enum ContractError {
 
     #[error("invalid set max_compute_period, need bigger than zero")]
     InvalidSetMaxPeriod {},
+
+    #[error("already granted address {address}")]
+    AlreadyGranted {
+        address: String,
+    },
+
+    #[error("invalid granted address {address}")]
+    InvalidGrantedAddress {
+        address: String,
+    },
 }

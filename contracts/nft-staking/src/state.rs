@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use cw20::Expiration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +138,27 @@ impl Claim {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct Grant {
+    pub address: String,
+    pub expires: Expiration,
+}
+
+impl Grant {
+    pub fn new(
+        address: String,
+        expires: Option<Expiration>,
+    ) -> Self {
+        let expires_data: Expiration;
+        if expires.is_none() {
+            expires_data = Expiration::default()
+        } else {
+            expires_data = expires.unwrap()
+        }
+        Grant { address, expires: expires_data }
+    }
+}
+
 pub const CONFIG_STATE: Item<Config> = Item::new("config");
 pub const START_TIMESTAMP: Item<u64> = Item::new("start_timestamp");
 pub const REWARDS_SCHEDULE: Item<u128> = Item::new("rewards_schedule");
@@ -147,3 +169,4 @@ pub const NEXT_CLAIMS: Map<String, NextClaim> = Map::new("next_claims");
 pub const TOKEN_INFOS: Map<String, TokenInfo> = Map::new("token_infos");
 pub const NUMBER_OF_STAKED_NFTS: Item<u128> = Item::new("number_of_staked_nfts");
 pub const MAX_COMPUTE_PERIOD: Item<u64> = Item::new("max_compute_period");
+pub const GRANTS: Map<String, Grant> = Map::new("grant");

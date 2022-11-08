@@ -5,8 +5,8 @@ use cw20::Expiration;
 use cw721::{Cw721QueryMsg, AllNftInfoResponse, OwnerOfResponse, NftInfoResponse, Approval};
 use cw721_base::Extension;
 use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance};
-use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse, StakedNftsByOwnerResponse, TokenInfoMsg};
-use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, STAKER_HISTORIES, TOKEN_INFOS, NEXT_CLAIMS, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD};
+use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse, StakedNftsByOwnerResponse, TokenInfoMsg, GetGrantsResponse};
+use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, STAKER_HISTORIES, TOKEN_INFOS, NEXT_CLAIMS, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant};
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(
@@ -16,6 +16,7 @@ pub fn query(
 ) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetConfig {} => to_binary(&get_config(deps)?),
+        QueryMsg::GetAllGrants {} => to_binary(&get_all_grants(deps)?),
         QueryMsg::GetRewardsSchedule {} => to_binary(&get_rewards_schedule(deps)?),
         QueryMsg::GetMaxComputePeriod {} => to_binary(&get_max_compute_period(deps)?),
         QueryMsg::StartTime {} => to_binary(&start_time(deps, env)?),
@@ -42,6 +43,26 @@ fn get_config(deps: Deps) -> StdResult<ConfigResponse> {
         white_listed_nft_contract: config_state.white_listed_nft_contract.to_string(),
         rewards_token_contract: config_state.rewards_token_contract.to_string(),
     })
+}
+
+// query granted addresses.
+fn get_all_grants(
+    deps: Deps,
+) -> StdResult<GetGrantsResponse> {
+    let grants: StdResult<Vec<_>> = GRANTS.range(deps.storage, None, None, Order::Ascending).collect();
+    match grants {
+        Ok(t) => {
+            let mut grants: Vec<Grant> = vec![];
+            for grant in t {
+                grants.append(&mut vec![grant.1]);
+            }
+            Ok(GetGrantsResponse::new(grants))
+        },
+        Err(e) => {
+            Ok(GetGrantsResponse::with_err(e))
+        }
+    }
+
 }
 
 // get rewards schedule includes rewards per cycle.
@@ -283,6 +304,7 @@ fn staked_all_nft_info(
     }
 }
 
+// the number of nfts which are staked by the staker.
 pub fn staked_nfts_by_owner(
     deps: Deps,
     staker: String,
