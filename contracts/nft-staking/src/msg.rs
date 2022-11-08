@@ -78,7 +78,10 @@ pub enum QueryMsg {
     },
     NumberOfStakedNfts {},
     StakedAllNftInfo {
-        token_id:String,
+        token_id: String,
+    },
+    StakedNftsByOwner {
+        staker: String,
     }
 }
 

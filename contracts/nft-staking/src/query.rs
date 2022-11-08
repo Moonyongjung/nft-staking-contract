@@ -28,6 +28,7 @@ pub fn query(
         QueryMsg::NextClaim { staker, token_id } => to_binary(&next_claims(deps, staker, token_id)?),
         QueryMsg::NumberOfStakedNfts {} => to_binary(&number_of_staked_nfts(deps)?),
         QueryMsg::StakedAllNftInfo { token_id } => to_binary(&staked_all_nft_info(deps, token_id)?),
+        QueryMsg::StakedNftsByOwner { staker } => to_binary(&staked_nfts_by_owner(deps, staker)?),
     }
 }
 
