@@ -3,8 +3,10 @@ use std::str::FromStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::Addr;
+use cosmwasm_std::{Addr, DepsMut, MessageInfo};
 use cw_storage_plus::{Item, Map};
+
+use crate::ContractError;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
@@ -21,9 +23,16 @@ pub struct Snapshot {
     pub start_cycle: u64,
 }
 
-impl Default for Snapshot {
-    fn default() -> Self {
+impl Snapshot {
+    pub fn default() -> Self {
         Snapshot { is_staked: false, start_cycle: 0 }
+    }
+
+    pub fn new(
+        is_staked: bool,
+        start_cycle: u64,
+    ) -> Self {
+        Snapshot { is_staked, start_cycle }
     }
 }
 
@@ -35,14 +44,61 @@ pub struct TokenInfo {
     pub withdraw_cycle: u64,
 }
 
-impl Default for TokenInfo {
-    fn default() -> Self {
+impl TokenInfo {
+    pub fn default() -> Self {
         TokenInfo { 
             owner: String::from_str("").unwrap(), 
             is_staked: false, 
             deposit_cycle: 0, 
             withdraw_cycle: 0
         }
+    }
+
+    pub fn stake(
+        owner: String,
+        is_staked: bool,
+        deposit_cycle: u64,
+    ) -> Self {
+        TokenInfo { 
+            owner, 
+            is_staked, 
+            deposit_cycle, 
+            withdraw_cycle: 0
+        }
+    }
+
+    pub fn unstake(
+        is_staked: bool,
+        deposit_cycle: u64,
+        withdraw_cycle: u64,
+    ) -> Self {
+        TokenInfo { 
+            owner: String::from_str("").unwrap(), 
+            is_staked, 
+            deposit_cycle, 
+            withdraw_cycle 
+        }
+    }
+
+    // check message sender is nft owner which records in the TOKEN_INFOs state.
+    pub fn check_staker(
+        deps: DepsMut,
+        info: MessageInfo,
+        token_id: String,
+    ) -> Result<Self, ContractError> {
+        let token_info = TOKEN_INFOS.may_load(deps.storage, token_id)?;
+        if token_info.is_none() {
+            return Err(ContractError::InvalidTokenId {})
+        }
+
+        if token_info.clone().unwrap().owner != info.sender.clone() {
+            return Err(ContractError::InvalidNftOwner{
+                requester: info.sender.to_string(),
+                nft_owner: token_info.unwrap().owner,
+            })
+        }
+
+        Ok(token_info.unwrap())
     }
 }
 
@@ -52,12 +108,19 @@ pub struct NextClaim {
     pub staker_snapshot_index: u64,
 }
 
-impl Default for NextClaim {
-    fn default() -> Self {
+impl NextClaim {
+    pub fn default() -> Self {
         NextClaim { 
             period: 0,
             staker_snapshot_index: 0,
         }
+    }
+
+    pub fn new(
+        period: u64,
+        staker_snapshot_index: u64,
+    ) -> Self {
+        NextClaim { period, staker_snapshot_index }
     }
 }
 
@@ -68,8 +131,8 @@ pub struct Claim {
     pub amount: u128,
 }
 
-impl Default for Claim {
-    fn default() -> Self {
+impl Claim {
+    pub fn default() -> Self {
         Claim { start_period: 0, periods: 0, amount: 0 }
     }
 }

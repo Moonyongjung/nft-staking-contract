@@ -260,10 +260,7 @@ mod tests{
 
         if next_claims.is_none() {
             let current_period = get_period(current_cycle, config.clone()).unwrap();
-            let new_next_claim = NextClaim {
-                period: current_period,
-                staker_snapshot_index: 0,
-            };
+            let new_next_claim = NextClaim::new(current_period, 0);
 
             NEXT_CLAIMS.save(deps.branch().storage, staker_tokenid_key.clone(), &new_next_claim).unwrap();
         }
@@ -278,12 +275,8 @@ mod tests{
             }    
         }
 
-        let new_token_info = TokenInfo {
-            owner: staker.clone(),
-            is_staked: IS_STAKED,
-            deposit_cycle: current_cycle,
-            withdraw_cycle: 0,
-        };
+        let new_token_info = TokenInfo::stake(staker.clone(), IS_STAKED, current_cycle);
+        
         TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &new_token_info).unwrap();
     }
 
@@ -339,12 +332,7 @@ mod tests{
             assert_eq!(update_histories_response.staker, "xpla1ma4peq833n2k3t7u2f60w420ltx8nvz0g0vwlu@token_id_test_0");
             assert_eq!(update_histories_response.staker_histories_stake, false);
 
-            let token_info = TokenInfo {
-                owner: "0".to_string(),
-                is_staked: !is_staked,
-                withdraw_cycle: current_cycle,
-                deposit_cycle: token_infos.clone().unwrap().deposit_cycle,            
-            };
+            let token_info = TokenInfo::unstake(!is_staked, token_infos.clone().unwrap().deposit_cycle, current_cycle);
 
             TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info).unwrap();
         }
@@ -421,19 +409,13 @@ mod tests{
         assert!(staker_history[0].is_staked);
     
         let s_state_data = staker_history[next_claim.clone().staker_snapshot_index as usize].clone();
-        let mut staker_snapshot = Snapshot {
-            is_staked: s_state_data.is_staked,
-            start_cycle: s_state_data.start_cycle,
-        };
+        let mut staker_snapshot = Snapshot::new(s_state_data.is_staked, s_state_data.start_cycle);
     
         let mut next_staker_snapshot = Snapshot::default();
     
         if next_claim.staker_snapshot_index != staker_history.clone().len() as u64 - 1 {
             let s_data = &staker_history.clone()[(next_claim.staker_snapshot_index + 1) as usize];
-            next_staker_snapshot = Snapshot {
-                is_staked: s_data.is_staked,
-                start_cycle: s_data.start_cycle,
-            }
+            next_staker_snapshot = Snapshot::new(s_data.is_staked, s_data.start_cycle);
         }
     
         claim.periods = end_claim_period - next_claim.period;

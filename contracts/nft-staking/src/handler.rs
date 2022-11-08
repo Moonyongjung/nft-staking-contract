@@ -4,7 +4,7 @@ use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, Wasm
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
 use cw721::{Cw721ExecuteMsg};
 
-use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, TOKEN_INFOS, TokenInfo, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD}, ContractError, msg::{UpdateHistoriesResponse}};
+use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD}, ContractError, msg::{UpdateHistoriesMsg}};
 
 pub const IS_STAKED: bool = true;
 const MIN_CYCLE_LENGTH: u64 = 10;
@@ -121,28 +121,6 @@ pub fn check_contract_owner(
     Ok(true)
 }
 
-// check message sender is nft owner which records in the TOKEN_INFOs state.
-pub fn check_staker(
-    deps: DepsMut,
-    info: MessageInfo,
-    token_id: String,
-) -> Result<TokenInfo, ContractError> {
-
-    let token_info = TOKEN_INFOS.may_load(deps.storage, token_id)?;
-    if token_info.is_none() {
-        return Err(ContractError::InvalidTokenId {})
-    }
-
-    if token_info.clone().unwrap().owner != info.sender.clone() {
-        return Err(ContractError::InvalidNftOwner{
-            requester: info.sender.to_string(),
-            nft_owner: token_info.unwrap().owner,
-        })
-    }
-
-    Ok(token_info.unwrap())
-}
-
 // check the contract is started and return start timestamp.
 pub fn check_start_timestamp(
     deps: DepsMut,
@@ -233,12 +211,12 @@ pub fn update_histories(
     staker_tokenid_key: String,
     is_staked: bool,
     current_cycle: u64,
-) -> Result<UpdateHistoriesResponse, ContractError> {
+) -> Result<UpdateHistoriesMsg, ContractError> {
     let staker_snapshot_index = update_staker_history(deps.branch(), is_staked, current_cycle, staker_tokenid_key.clone())?;
     let staker_history = STAKER_HISTORIES.may_load(deps.branch().storage, staker_tokenid_key.clone()).unwrap().unwrap();
     let staker_snapshot = &staker_history[staker_snapshot_index as usize];
 
-    let update_histories_res = UpdateHistoriesResponse {
+    let update_histories_res = UpdateHistoriesMsg {
         staker: staker_tokenid_key,
         current_cycle,
         staker_histories_stake: staker_snapshot.is_staked,
@@ -335,18 +313,12 @@ pub fn compute_rewards(
     let staker_history = STAKER_HISTORIES.may_load(deps.storage, staker_tokenid_key.clone()).unwrap().unwrap();
 
     let s_state_data = staker_history[next_claim.clone().staker_snapshot_index as usize].clone();
-    let mut staker_snapshot = Snapshot {
-        is_staked: s_state_data.is_staked,
-        start_cycle: s_state_data.start_cycle,
-    };
+    let mut staker_snapshot = Snapshot::new(s_state_data.is_staked, s_state_data.start_cycle);
 
     let mut next_staker_snapshot = Snapshot::default();
     if next_claim.staker_snapshot_index != staker_history.clone().len() as u64 - 1 {
         let s_data = &staker_history.clone()[(next_claim.staker_snapshot_index + 1) as usize];
-        next_staker_snapshot = Snapshot {
-            is_staked: s_data.is_staked,
-            start_cycle: s_data.start_cycle,
-        }
+        next_staker_snapshot = Snapshot::new(s_data.is_staked, s_data.start_cycle);
     }
 
     // exclues the current period.

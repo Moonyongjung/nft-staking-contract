@@ -6,7 +6,7 @@ use cw20::{Cw20ReceiveMsg};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
-use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, check_staker, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, contract_info, manage_number_nfts};
+use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, contract_info, manage_number_nfts};
 use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
 use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD};
 
@@ -70,7 +70,7 @@ pub fn execute(
         ExecuteMsg::SetConfig(msg) => set_config(deps, info, config, msg),
         ExecuteMsg::AddRewardsForPeriods { rewards_per_cycle } => add_rewards_for_periods(deps, env, info, rewards_per_cycle, config),
         ExecuteMsg::Receive (msg) => add_rewards_pool(deps, info, env, config, msg),
-        ExecuteMsg::SetMaxComputePeriod { new_max_compute_period } => set_max_compute_period(deps, new_max_compute_period),
+        ExecuteMsg::SetMaxComputePeriod { new_max_compute_period } => set_max_compute_period(deps, info, new_max_compute_period, config),
         ExecuteMsg::Start {} => start(deps, info, env, config),
         ExecuteMsg::Disable {} => disable(deps, info, config),
         ExecuteMsg::Enable {} => enable(deps, info, config),
@@ -187,8 +187,11 @@ pub fn add_rewards_pool (
 // nft staking contract needs max_compute_period to avoid restriction about query gas limit of wasmd(defaultSmartQueryGasLimit is 3,000,000).  
 pub fn set_max_compute_period (
     deps: DepsMut,
+    info: MessageInfo,
     new_max_compute_period: u64,
+    config: Config,
 ) -> Result<Response, ContractError> {
+    check_contract_owner(info, config)?;
     if new_max_compute_period <= 0 {
         return Err(ContractError::InvalidSetMaxPeriod {})
     }
@@ -371,10 +374,7 @@ pub fn stake_nft(
     // i.e. rewards were claimed until the last staker snapshot and the last staker snapshot is not staked.
     if next_claims.is_none() {
         let current_period = get_period(current_cycle, config.clone())?;
-        let new_next_claim = NextClaim {
-            period: current_period,
-            staker_snapshot_index: 0,
-        };
+        let new_next_claim = NextClaim::new(current_period, 0);
 
         NEXT_CLAIMS.save(deps.branch().storage, staker_tokenid_key.clone(), &new_next_claim)?;
     }
@@ -389,12 +389,8 @@ pub fn stake_nft(
         }    
     }
 
-    let new_token_info = TokenInfo {
-        owner: staker.clone(),
-        is_staked: IS_STAKED,
-        deposit_cycle: current_cycle,
-        withdraw_cycle: 0,
-    };
+    let new_token_info = TokenInfo::stake(staker.clone(), IS_STAKED, current_cycle);
+    
     TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &new_token_info)?;
     manage_number_nfts(deps.branch(), true);
 
@@ -420,7 +416,7 @@ pub fn unstake_nft(
 ) -> Result<Response, ContractError> {
     let staker = info.clone().sender.to_string();
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
-    let token_info = check_staker(deps.branch(), info.clone(), token_id.clone())?;
+    let token_info = TokenInfo::check_staker(deps.branch(), info.clone(), token_id.clone())?;
 
     let start_timestamp = check_start_timestamp(deps.branch())?;
     let timestamp = env.block.time.seconds();
@@ -453,12 +449,7 @@ pub fn unstake_nft(
 
         // clear the token owner to ensure it cannot be unstaked again without being re-staked.
         // set the withdrawal cycle to ensure it cannot be re-staked during the same cycle.
-        let token_info = TokenInfo {
-            owner: "".to_string(),
-            is_staked: !is_staked,
-            withdraw_cycle: current_cycle,
-            deposit_cycle: token_info.clone().deposit_cycle,            
-        };
+        let token_info = TokenInfo::unstake(!is_staked, token_info.clone().deposit_cycle, current_cycle);
 
         TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info)?;
     }

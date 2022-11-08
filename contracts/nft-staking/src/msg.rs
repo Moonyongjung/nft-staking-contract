@@ -1,11 +1,15 @@
 use std::str::FromStr;
 
+use cosmwasm_std::StdError;
 use cw20::Cw20ReceiveMsg;
 use cw721::{Cw721ReceiveMsg, AllNftInfoResponse};
+use cw721_base::Extension;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::state::{Snapshot, TokenInfo, Claim, NextClaim};
+use crate::{state::{Snapshot, TokenInfo, Claim, NextClaim}, ContractError};
+
+pub const SUCCESS: &str = "success";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
@@ -104,6 +108,15 @@ impl Default for TokenInfoMsg {
     }
 }
 
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct UpdateHistoriesMsg {
+    pub staker: String,
+    pub current_cycle: u64,
+    pub staker_histories_stake: bool,
+}
+
 // responses
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -116,17 +129,27 @@ pub struct ConfigResponse {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub struct UpdateHistoriesResponse {
-    pub staker: String,
-    pub current_cycle: u64,
-    pub staker_histories_stake: bool,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct RewardsScheduleResponse {
     pub rewards_per_cycle: u128,
     pub res_msg: String,
+}
+
+impl RewardsScheduleResponse {
+    pub fn new(
+        rewards_per_cycle: u128,
+    ) -> Self {
+        RewardsScheduleResponse {
+            rewards_per_cycle,
+            res_msg: SUCCESS.to_string(),
+        }
+    }
+
+    pub fn none_rewards_schedule() -> Self {
+        RewardsScheduleResponse { 
+            rewards_per_cycle: 0, 
+            res_msg: ContractError::NoneRewardsSchedule {}.to_string()
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -143,11 +166,46 @@ pub struct StartTimeResponse {
     pub res_msg: String,
 }
 
+impl StartTimeResponse {
+    pub fn new(
+        start_timestamp: u64,
+        now_time: u64,
+    ) -> Self {
+        StartTimeResponse { 
+            start: true, 
+            start_time: start_timestamp, 
+            now_time, 
+            res_msg: SUCCESS.to_string(),
+        }
+    }
+
+    pub fn not_started(now_time: u64) -> Self {
+        StartTimeResponse { 
+            start: false, 
+            start_time: 0, 
+            now_time, 
+            res_msg: ContractError::NotStarted {}.to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct DisableResponse {
     pub disable: bool,
     pub res_msg: String,
+}
+
+impl DisableResponse {
+    pub fn new(
+        disable: bool
+    ) -> Self {
+        DisableResponse { disable, res_msg: SUCCESS.to_string() }
+    }
+
+    pub fn not_started() -> Self {
+        DisableResponse { disable: true, res_msg: ContractError::NotStarted {}.to_string() }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -157,6 +215,21 @@ pub struct TotalRewardsPoolResponse {
     pub res_msg: String,
 }
 
+impl TotalRewardsPoolResponse {
+    pub fn new(
+        total_rewards_pool: u128,
+    ) -> Self {
+        TotalRewardsPoolResponse { total_rewards_pool, res_msg: SUCCESS.to_string() }
+    }
+
+    pub fn empty_rewards_pool() -> Self {
+        TotalRewardsPoolResponse { 
+            total_rewards_pool: 0, 
+            res_msg: ContractError::EmptyRewardsPool {}.to_string() 
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct WithdrawRewardsPoolResponse {
@@ -164,11 +237,47 @@ pub struct WithdrawRewardsPoolResponse {
     pub res_msg: String,
 }
 
+impl WithdrawRewardsPoolResponse {
+    pub fn new(
+        withdraw_rewards_pool_amount: u128,
+    ) -> Self {
+        WithdrawRewardsPoolResponse {
+            withdraw_rewards_pool_amount,
+            res_msg: SUCCESS.to_string(),
+        }
+    }
+
+    pub fn with_err(e: ContractError) -> Self {
+        WithdrawRewardsPoolResponse { 
+            withdraw_rewards_pool_amount: 0, 
+            res_msg: e.to_string() 
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct NextClaimResponse {
     pub next_claim: NextClaim,
     pub res_msg: String,
+}
+
+impl NextClaimResponse {
+    pub fn new(
+        next_claim: NextClaim
+    ) -> Self {
+        NextClaimResponse { 
+            next_claim: next_claim, 
+            res_msg: SUCCESS.to_string() 
+        }
+    }
+
+    pub fn empty_next_claim() -> Self {
+        NextClaimResponse { 
+            next_claim: NextClaim::default(), 
+            res_msg: ContractError::EmptyNextClaim {}.to_string() 
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -179,12 +288,67 @@ pub struct StakerHistoryResponse {
     pub res_msg: String,
 }
 
+impl StakerHistoryResponse {
+    pub fn new(
+        staker_tokenid_key: String,
+        staker_history: Vec<Snapshot>,
+    ) -> Self {
+        StakerHistoryResponse { 
+            staker_tokenid_key, 
+            staker_history, 
+            res_msg: SUCCESS.to_string() 
+        }
+    }
+
+    pub fn have_not_history(staker_tokenid_key: String) -> Self {
+        StakerHistoryResponse { 
+            staker_tokenid_key, 
+            staker_history: vec![], 
+            res_msg: ContractError::HaveNotHistory {}.to_string() 
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct TokenInfosResponse {
     pub token_id: String,
     pub token_info: TokenInfo,
     pub res_msg: String,
+}
+
+impl TokenInfosResponse {
+    pub fn new(
+        token_id: String,
+        token_info: TokenInfo,
+    ) -> Self {
+        TokenInfosResponse { 
+            token_id, 
+            token_info, 
+            res_msg: SUCCESS.to_string() 
+        }
+    }
+
+    pub fn unstaked_token_id(
+        token_id: String,
+        token_info: TokenInfo
+    ) -> Self {
+        TokenInfosResponse { 
+            token_id, 
+            token_info, 
+            res_msg: ContractError::UnstakedTokenId {}.to_string() 
+        } 
+    }
+
+    pub fn invalid_token_id(
+        token_id: String
+    ) -> Self {
+        TokenInfosResponse { 
+            token_id, 
+            token_info: TokenInfo::default(), 
+            res_msg: ContractError::InvalidTokenId {}.to_string() 
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -195,11 +359,82 @@ pub struct EstimateRewardsResponse {
     pub res_msg: String,
 }
 
+impl EstimateRewardsResponse {
+    pub fn new(
+        req_staker_tokenid_key: String,
+        claim: Claim,
+    ) -> Self {
+        EstimateRewardsResponse { 
+            req_staker_tokenid_key, 
+            claim, 
+            res_msg: SUCCESS.to_string()
+        }
+    }
+
+    pub fn invalid_claim(
+        req_staker_tokenid_key: String
+    ) -> Self {
+        EstimateRewardsResponse { 
+            req_staker_tokenid_key, 
+            claim: Claim::default(), 
+            res_msg: ContractError::InvalidClaim {}.to_string() 
+        }
+    }
+
+    pub fn not_started(
+        req_staker_tokenid_key: String
+    ) -> Self {
+        EstimateRewardsResponse { 
+            req_staker_tokenid_key, 
+            claim: Claim::default(), 
+            res_msg: ContractError::NotStarted {}.to_string()
+        }
+    }
+
+    pub fn disabled(
+        req_staker_tokenid_key: String
+    ) -> Self {
+        EstimateRewardsResponse { 
+            req_staker_tokenid_key, 
+            claim: Claim::default(), 
+            res_msg: ContractError::Disabled {}.to_string() 
+        }
+    }
+
+    pub fn with_err(
+        req_staker_tokenid_key: String,
+        e: ContractError,
+    ) -> Self {
+        EstimateRewardsResponse { 
+            req_staker_tokenid_key, 
+            claim: Claim::default(), 
+            res_msg: e.to_string() 
+        }
+    }
+
+
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct NumberOfStakedNftsResponse {
     pub number_of_staked_nfts: u128,
     pub res_msg: String,
+}
+
+impl NumberOfStakedNftsResponse {
+    pub fn new(
+        number_of_staked_nfts: u128
+    ) -> Self {
+        NumberOfStakedNftsResponse { 
+            number_of_staked_nfts, 
+            res_msg: SUCCESS.to_string()
+        }
+    }
+
+    pub fn not_started() -> Self {
+        NumberOfStakedNftsResponse { number_of_staked_nfts: 0, res_msg: ContractError::NotStarted {}.to_string() }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -209,11 +444,53 @@ pub struct StakedAllNftInfoResponse<T> {
     pub res_msg: String,
 }
 
+impl StakedAllNftInfoResponse<Extension> {
+    pub fn new(
+        all_nft_info: AllNftInfoResponse<Extension>
+    ) -> Self {
+        StakedAllNftInfoResponse { 
+            all_nft_info, 
+            res_msg: SUCCESS.to_string()
+        }
+    }
+
+    pub fn with_err(
+        all_nft_info: AllNftInfoResponse<Extension>,
+        e: StdError
+    ) -> Self {
+        StakedAllNftInfoResponse { 
+            all_nft_info, 
+            res_msg: e.to_string() 
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct StakedNftsByOwnerResponse {
     pub staked_nfts: Vec<TokenInfoMsg>,
     pub res_msg: String,
+}
+
+impl StakedNftsByOwnerResponse {
+    pub fn new(
+        staked_nfts: Vec<TokenInfoMsg>,
+    ) -> Self {
+        StakedNftsByOwnerResponse { 
+            staked_nfts, 
+            res_msg: SUCCESS.to_string() 
+        }
+    }
+
+    pub fn with_err(
+        staked_nfts: Vec<TokenInfoMsg>,
+        e: StdError
+    ) -> Self {
+        StakedNftsByOwnerResponse { 
+            staked_nfts, 
+            res_msg: e.to_string() 
+        }
+    }
 }
 
 
