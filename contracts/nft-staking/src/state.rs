@@ -3,11 +3,15 @@ use std::str::FromStr;
 use cw20::Expiration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
 use cosmwasm_std::{Addr, DepsMut, MessageInfo};
 use cw_storage_plus::{Item, Map};
 
 use crate::ContractError;
+
+pub const UNSPECIFIED: &str = "BOND_STATUS_UNSPECIFIED";
+pub const UNBONDED: &str = "BOND_STATUS_UNBONDED";
+pub const UNBONDING: &str = "BOND_STATUS_UNBONDING";
+pub const BONDED: &str = "BOND_STATUS_BONDED";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
@@ -43,6 +47,8 @@ pub struct TokenInfo {
     pub is_staked: bool,
     pub deposit_cycle: u64,
     pub withdraw_cycle: u64,
+    pub bond_status: String,
+    pub req_unbond_time: u64,
 }
 
 impl TokenInfo {
@@ -51,7 +57,9 @@ impl TokenInfo {
             owner: String::from_str("").unwrap(), 
             is_staked: false, 
             deposit_cycle: 0, 
-            withdraw_cycle: 0
+            withdraw_cycle: 0,
+            bond_status: UNSPECIFIED.to_string(),
+            req_unbond_time: 0,
         }
     }
 
@@ -64,10 +72,45 @@ impl TokenInfo {
             owner, 
             is_staked, 
             deposit_cycle, 
-            withdraw_cycle: 0
+            withdraw_cycle: 0,
+            bond_status: BONDED.to_string(),
+            req_unbond_time: 0,
         }
     }
 
+    pub fn unstake_unbonding(
+        owner: String,
+        is_staked: bool,
+        deposit_cycle: u64,
+        withdraw_cycle: u64,
+        req_unbond_time: u64,
+    ) -> Self {
+        TokenInfo { 
+            owner, 
+            is_staked, 
+            deposit_cycle, 
+            withdraw_cycle,
+            bond_status: UNBONDING.to_string(),
+            req_unbond_time,
+        }
+    }
+
+    pub fn unstake_unbonded(
+        owner: String,
+        is_staked: bool,
+        deposit_cycle: u64,
+        withdraw_cycle: u64,
+        req_unbond_time: u64,
+    ) -> Self {
+        TokenInfo { 
+            owner, 
+            is_staked, 
+            deposit_cycle, 
+            withdraw_cycle,
+            bond_status: UNBONDED.to_string(),
+            req_unbond_time,
+        }
+    }
     pub fn unstake(
         is_staked: bool,
         deposit_cycle: u64,
@@ -77,7 +120,9 @@ impl TokenInfo {
             owner: String::from_str("").unwrap(), 
             is_staked, 
             deposit_cycle, 
-            withdraw_cycle 
+            withdraw_cycle,
+            bond_status: UNSPECIFIED.to_string(),
+            req_unbond_time: 0,
         }
     }
 
@@ -170,3 +215,4 @@ pub const TOKEN_INFOS: Map<String, TokenInfo> = Map::new("token_infos");
 pub const NUMBER_OF_STAKED_NFTS: Item<u128> = Item::new("number_of_staked_nfts");
 pub const MAX_COMPUTE_PERIOD: Item<u64> = Item::new("max_compute_period");
 pub const GRANTS: Map<String, Grant> = Map::new("grant");
+pub const UNBONDING_DURATION: Item<u64> = Item::new("unbonding_duration");

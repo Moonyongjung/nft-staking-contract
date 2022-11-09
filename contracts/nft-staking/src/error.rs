@@ -56,6 +56,9 @@ pub enum ContractError {
         requester: String,
     },
 
+    #[error("token id is already staked")]
+    AlreadyStaked {},
+
     #[error("unstaked token cooldown")]
     UnstakedTokenCooldown {},
 
@@ -116,4 +119,10 @@ pub enum ContractError {
     InvalidGrantedAddress {
         address: String,
     },
+
+    #[error("not reach unbonding time")]
+    NotReachUnbondingTime {},
+
+    #[error("request token id is under unbonding, or unbonded token id should execute unstake not claim")]
+    TokenIdIsUnbonding {},
 }

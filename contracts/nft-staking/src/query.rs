@@ -5,8 +5,8 @@ use cw20::Expiration;
 use cw721::{Cw721QueryMsg, AllNftInfoResponse, OwnerOfResponse, NftInfoResponse, Approval};
 use cw721_base::Extension;
 use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance};
-use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse, StakedNftsByOwnerResponse, TokenInfoMsg, GetGrantsResponse};
-use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, STAKER_HISTORIES, TOKEN_INFOS, NEXT_CLAIMS, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant};
+use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse, StakedNftsByOwnerResponse, TokenInfoMsg, GetGrantsResponse, UnbondingDurationResponse};
+use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, STAKER_HISTORIES, TOKEN_INFOS, NEXT_CLAIMS, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant, UNBONDING_DURATION};
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(
@@ -19,12 +19,13 @@ pub fn query(
         QueryMsg::GetAllGrants {} => to_binary(&get_all_grants(deps)?),
         QueryMsg::GetRewardsSchedule {} => to_binary(&get_rewards_schedule(deps)?),
         QueryMsg::GetMaxComputePeriod {} => to_binary(&get_max_compute_period(deps)?),
+        QueryMsg::GetUnbondingDuration {} => to_binary(&get_unbonding_duration(deps)?),
         QueryMsg::StartTime {} => to_binary(&start_time(deps, env)?),
         QueryMsg::Disable {} => to_binary(&disable(deps)?),
         QueryMsg::TotalRewardsPool {} => to_binary(&total_rewards_pool(deps)?),
         QueryMsg::WithdrawRewardsPoolAmount {} => to_binary(&withdraw_rewards_pool_amount(deps, env)?),
         QueryMsg::StakerHistory { staker, token_id } => to_binary(&staker_history(deps, staker, token_id)?),
-        QueryMsg::TokenInfo { token_id } => to_binary(&token_infos(deps, token_id)?),
+        QueryMsg::TokenInfo { token_id } => to_binary(&token_infos(deps, env, token_id)?),
         QueryMsg::EstimateRewards { periods, staker, token_id } => to_binary(&estimate_rewards(deps, env, periods, token_id, staker)?),
         QueryMsg::NextClaim { staker, token_id } => to_binary(&next_claims(deps, staker, token_id)?),
         QueryMsg::NumberOfStakedNfts {} => to_binary(&number_of_staked_nfts(deps)?),
@@ -81,6 +82,7 @@ fn get_rewards_schedule(
     }
 }
 
+// query value of max compute period. 
 fn get_max_compute_period(
     deps: Deps,
 ) -> StdResult<MaxComputePeriodResponse> {
@@ -88,6 +90,19 @@ fn get_max_compute_period(
 
     let res = MaxComputePeriodResponse {
         max_compute_period,
+    };
+
+    Ok(res)
+}
+
+// query unbonding duration.
+fn get_unbonding_duration(
+    deps: Deps,
+) -> StdResult<UnbondingDurationResponse> {
+    let unbonding_duration = UNBONDING_DURATION.load(deps.storage)?;
+
+    let res = UnbondingDurationResponse {
+        unbonding_duration,
     };
 
     Ok(res)
@@ -193,6 +208,7 @@ fn staker_history (
 // get token infos retrieved by token ID.
 fn token_infos (
     deps: Deps,
+    env: Env,
     token_id: String,
 ) -> StdResult<TokenInfosResponse> {
     let token_infos = TOKEN_INFOS.may_load(deps.storage, token_id.clone())?;
@@ -202,7 +218,7 @@ fn token_infos (
 
     } else {
         if token_infos.clone().unwrap().is_staked {
-            Ok(TokenInfosResponse::new(token_id, token_infos.unwrap()))
+            Ok(TokenInfosResponse::new(deps, env, token_id, token_infos.unwrap()))
 
         } else {
             Ok(TokenInfosResponse::unstaked_token_id(token_id, token_infos.unwrap()))
@@ -237,7 +253,7 @@ pub fn estimate_rewards(
     let config = CONFIG_STATE.load(deps.storage)?;
     let now = env.block.time.seconds();
 
-    let compute_rewards = compute_rewards(deps, staker_tokenid_key.clone(), periods, now, start_timestamp.unwrap(), config.clone());
+    let compute_rewards = compute_rewards(deps, staker_tokenid_key.clone(), periods, now, start_timestamp.unwrap(), config.clone(), token_id);
     match compute_rewards {
         Ok(t) => {
             let claim = t.0;
@@ -298,7 +314,6 @@ fn staked_all_nft_info(
                     extension: Extension::None,
                 }
             };
-
             Ok(StakedAllNftInfoResponse::with_err(empty_res, e))
         }            
     }
@@ -323,7 +338,6 @@ pub fn staked_nfts_by_owner(
                     staked_nfts.append(&mut vec![info])
                 }
             }
-
             Ok(StakedNftsByOwnerResponse::new(staked_nfts))
         },
         Err(e) => {

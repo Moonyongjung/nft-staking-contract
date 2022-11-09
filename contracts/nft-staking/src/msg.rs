@@ -1,13 +1,13 @@
 use std::str::FromStr;
 
-use cosmwasm_std::StdError;
+use cosmwasm_std::{StdError, Env, Deps};
 use cw20::{Cw20ReceiveMsg, Expiration};
 use cw721::{Cw721ReceiveMsg, AllNftInfoResponse};
 use cw721_base::Extension;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{state::{Snapshot, TokenInfo, Claim, NextClaim, Grant}, ContractError};
+use crate::{state::{Snapshot, TokenInfo, Claim, NextClaim, Grant, UNBONDING_DURATION, BONDED, UNBONDING, UNBONDED}, ContractError};
 
 pub const SUCCESS: &str = "success";
 
@@ -38,6 +38,9 @@ pub enum ExecuteMsg {
     SetMaxComputePeriod {
         new_max_compute_period: u64,
     },
+    SetUnbondingDuration {
+        new_unbonding_duration: u64,
+    },
     Start {},
     Disable {},
     Enable {},
@@ -64,6 +67,7 @@ pub enum QueryMsg {
     GetAllGrants {},
     GetRewardsSchedule {},
     GetMaxComputePeriod {},
+    GetUnbondingDuration {},
     StartTime {},
     Disable {},
     TotalRewardsPool {},
@@ -190,6 +194,11 @@ impl RewardsScheduleResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct MaxComputePeriodResponse {
     pub max_compute_period: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct UnbondingDurationResponse {
+    pub unbonding_duration: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -349,17 +358,48 @@ impl StakerHistoryResponse {
 pub struct TokenInfosResponse {
     pub token_id: String,
     pub token_info: TokenInfo,
+    pub is_reached_status_unbonded: Option<bool>,
     pub res_msg: String,
 }
 
 impl TokenInfosResponse {
     pub fn new(
+        deps: Deps,
+        env: Env,
         token_id: String,
         token_info: TokenInfo,
     ) -> Self {
+        let now = env.block.time.seconds();
+        let unbonding_duration = UNBONDING_DURATION.load(deps.storage).unwrap();
+
+        let mut status_unbonded: Option<bool> = Some(false);
+        let mut token_info_res = token_info.clone();
+
+        if token_info.clone().bond_status == UNBONDING &&
+            now > token_info.clone().req_unbond_time + unbonding_duration {
+
+            token_info_res = TokenInfo::unstake_unbonded(
+                token_info.clone().owner, 
+                token_info.clone().is_staked, 
+                token_info.clone().deposit_cycle, 
+                token_info.clone().withdraw_cycle, 
+                token_info.clone().req_unbond_time
+            );
+            status_unbonded = Some(true);
+        }
+
+        if token_info.clone().bond_status == UNBONDED {
+            status_unbonded = Some(true);
+        }
+
+        if token_info.clone().bond_status == BONDED {
+            status_unbonded = None
+        }
+
         TokenInfosResponse { 
             token_id, 
-            token_info, 
+            token_info: token_info_res,
+            is_reached_status_unbonded: status_unbonded,
             res_msg: SUCCESS.to_string() 
         }
     }
@@ -370,7 +410,8 @@ impl TokenInfosResponse {
     ) -> Self {
         TokenInfosResponse { 
             token_id, 
-            token_info, 
+            token_info,
+            is_reached_status_unbonded: None, 
             res_msg: ContractError::UnstakedTokenId {}.to_string() 
         } 
     }
@@ -381,6 +422,7 @@ impl TokenInfosResponse {
         TokenInfosResponse { 
             token_id, 
             token_info: TokenInfo::default(), 
+            is_reached_status_unbonded: None,
             res_msg: ContractError::InvalidTokenId {}.to_string() 
         }
     }

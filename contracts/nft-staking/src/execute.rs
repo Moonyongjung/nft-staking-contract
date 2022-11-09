@@ -8,9 +8,9 @@ use cw20::{Cw20ReceiveMsg, Expiration};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
-use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, _contract_info, check_contract_owner_only};
+use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, contract_info, check_contract_owner_only, check_unbonding_end};
 use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
-use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant};
+use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant, UNBONDING_DURATION, UNBONDING, BONDED};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "nft-staking";
@@ -43,11 +43,17 @@ pub fn instantiate(
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     CONFIG_STATE.save(deps.storage, &config_state)?;
 
+    // default max compute period = 2500.
+    // default unbonding duration = 1814400 (= 3 weeks).
+    let default_max_compute_period: u64 = 2500;
+    let default_unbonding_duration: u64 = 1814400;
+
     // Default of total rewards pool is zero and of disable state is false.
     TOTAL_REWARDS_POOL.save(deps.storage, &0)?;
     DISABLE.save(deps.storage, &false)?;
     NUMBER_OF_STAKED_NFTS.save(deps.storage, &0)?;
-    MAX_COMPUTE_PERIOD.save(deps.storage, &2500)?;
+    MAX_COMPUTE_PERIOD.save(deps.storage, &default_max_compute_period)?;
+    UNBONDING_DURATION.save(deps.storage, &default_unbonding_duration)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -75,6 +81,7 @@ pub fn execute(
         ExecuteMsg::AddRewardsForPeriods { rewards_per_cycle } => add_rewards_for_periods(deps, env, info, rewards_per_cycle, config),
         ExecuteMsg::Receive (msg) => add_rewards_pool(deps, info, env, config, msg),
         ExecuteMsg::SetMaxComputePeriod { new_max_compute_period } => set_max_compute_period(deps, info, env, new_max_compute_period, config),
+        ExecuteMsg::SetUnbondingDuration { new_unbonding_duration } => set_unbonding_duration(deps, info, env, config, new_unbonding_duration),
         ExecuteMsg::Start {} => start(deps, info, env, config),
         ExecuteMsg::Disable {} => disable(deps, info, env, config),
         ExecuteMsg::Enable {} => enable(deps, info, env, config),
@@ -83,7 +90,6 @@ pub fn execute(
         ExecuteMsg::ReceiveNft(msg) => stake_nft(deps, env, info, config, msg),
         ExecuteMsg::UnstakeNft { token_id, claim_recipient_address } => unstake_nft(deps, env, info, config, token_id, claim_recipient_address),
         ExecuteMsg::ClaimRewards { periods, token_id, claim_recipient_address } => claim_rewards(deps, info, env, periods, token_id, config, claim_recipient_address),
-
     }
 }
 
@@ -221,7 +227,7 @@ pub fn add_rewards_pool (
         })
     }
 
-    check_contract_owner(deps.branch(), _contract_info(msg.clone()).unwrap(), env.clone(), config.clone())?;
+    check_contract_owner(deps.branch(), contract_info(msg.clone()).unwrap(), env.clone(), config.clone())?;
 
     let total_rewards_pool = TOTAL_REWARDS_POOL.load(deps.storage)?;
     let rewards = total_rewards_pool + msg.amount.clone().u128();
@@ -257,6 +263,23 @@ pub fn set_max_compute_period (
         .add_attribute("method", "set_max_compute_period")
         .add_attribute("previous_max_compute_period", previous_max_compute_period.to_string())
         .add_attribute("new_max_compute_period", new_max_compute_period.to_string())
+    )
+}
+
+pub fn set_unbonding_duration(
+    mut deps: DepsMut,
+    info: MessageInfo,
+    env: Env,
+    config: Config,
+    new_unbonding_duration: u64,
+) -> Result<Response, ContractError> {
+    check_contract_owner(deps.branch(), info, env, config)?;
+
+    UNBONDING_DURATION.save(deps.storage, &new_unbonding_duration.clone())?;
+
+    Ok(Response::new()
+        .add_attribute("method", "set_unbonding_duration")
+        .add_attribute("new_unbonding_duration", new_unbonding_duration.to_string())
     )
 }
 
@@ -435,6 +458,22 @@ pub fn stake_nft(
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
 
     let update_histories_response = update_histories(deps.branch(), staker_tokenid_key.clone(), IS_STAKED, current_cycle)?;
+
+    let token_infos = TOKEN_INFOS.may_load(deps.branch().storage, token_id.clone()).unwrap();
+    if !token_infos.is_none() {
+
+        // prevent duplication.
+        if token_infos.clone().unwrap().is_staked {
+            return Err(ContractError::AlreadyStaked {})
+        }
+        let withdraw_cycle = token_infos.unwrap().withdraw_cycle;
+
+        // cannot re-stake when current cycle of block time is same setup withdraw cycle
+        if current_cycle == withdraw_cycle {
+            return Err(ContractError::UnstakedTokenCooldown {})
+        }    
+    }
+
     let next_claims = NEXT_CLAIMS.may_load(deps.branch().storage, staker_tokenid_key.clone()).unwrap();
 
     // initialise the next claim if it was the first stake for this staker or if 
@@ -445,16 +484,6 @@ pub fn stake_nft(
         let new_next_claim = NextClaim::new(current_period, 0);
 
         NEXT_CLAIMS.save(deps.branch().storage, staker_tokenid_key.clone(), &new_next_claim)?;
-    }
-
-    let token_infos = TOKEN_INFOS.may_load(deps.branch().storage, token_id.clone()).unwrap();
-    if !token_infos.is_none() {
-        let withdraw_cycle = token_infos.unwrap().withdraw_cycle;
-
-        // cannot re-stake when current cycle of block time is same setup withdraw cycle
-        if current_cycle == withdraw_cycle {
-            return Err(ContractError::UnstakedTokenCooldown {})
-        }    
     }
 
     let new_token_info = TokenInfo::stake(staker.clone(), IS_STAKED, current_cycle);
@@ -488,10 +517,28 @@ pub fn unstake_nft(
 
     let start_timestamp = check_start_timestamp(deps.branch())?;
     let timestamp = env.block.time.seconds();
-
-    let current_cycle = get_cycle(timestamp, start_timestamp, config.clone())?;
     let is_staked = token_info.clone().is_staked;
 
+    if token_info.bond_status == BONDED {
+        let token_info_unbonding = TokenInfo::unstake_unbonding(
+            staker.clone(), 
+            is_staked, 
+            token_info.clone().deposit_cycle, 
+            token_info.clone().withdraw_cycle,
+            timestamp.clone(),
+        );
+        TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info_unbonding)?;
+
+        return Ok(Response::new()
+            .add_attribute("method", "unstake_nft")
+            .add_attribute("request_unstake_time", timestamp.to_string())
+            .add_attribute("bond_status", UNBONDING)
+        )
+    }
+
+    check_unbonding_end(deps.as_ref(), token_info.clone(), timestamp.clone())?; 
+
+    let current_cycle = get_cycle(timestamp, start_timestamp, config.clone())?;
     let disable = check_disable(deps.branch())?;
     let mut claim_rewards_response = Response::new();
     if !disable {
@@ -504,12 +551,21 @@ pub fn unstake_nft(
 
         // before unstake the nft by staker, rewards token balances are transfer to staker.
         let current_period = get_current_period(timestamp.clone(), start_timestamp.clone(), config.clone()).unwrap();
-        let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), current_period, timestamp, start_timestamp, config.clone()).unwrap();
+        let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), current_period, timestamp, start_timestamp, config.clone(), token_id.clone()).unwrap();
         if compute_rewards.0.amount != 0 {
             let mut recipient: Option<String> = None;
             if !claim_recipient_address.is_none() {
                 recipient = claim_recipient_address;
             }
+            let token_info_unbonded = TokenInfo::unstake_unbonded(
+                staker.clone(), 
+                is_staked, 
+                token_info.clone().deposit_cycle, 
+                token_info.clone().withdraw_cycle,
+                token_info.clone().req_unbond_time,
+            );
+            TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info_unbonded)?;
+
             claim_rewards_response = claim_rewards(deps.branch(), info, env, current_period, token_id.clone(), config.clone(), recipient).unwrap();
         }
 
@@ -556,6 +612,14 @@ pub fn claim_rewards(
     let staker = info.clone().sender.to_string();
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
 
+    let token_info = TOKEN_INFOS.load(deps.branch().storage, token_id.clone())?;
+
+    // although the time reaches unbonded status, the staker should not claim directly.
+    // the staker is able to get balances of rewards only execute unstake function.
+    if token_info.bond_status == UNBONDING {
+        return Err(ContractError::TokenIdIsUnbonding {})
+    }
+
     let next_claim = NEXT_CLAIMS.may_load(deps.storage, staker_tokenid_key.clone())?;
     if next_claim.is_none() {
         return Err(ContractError::EmptyNextClaim {})
@@ -565,7 +629,7 @@ pub fn claim_rewards(
     let now = env.block.time.seconds();
     let claim: Claim;
     let new_next_claim: NextClaim;
-    let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), periods, now, start_timestamp, config.clone());
+    let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), periods, now, start_timestamp, config.clone(), token_id.clone());
     match compute_rewards {
         Ok(t) => {
             claim = t.0;

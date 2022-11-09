@@ -4,7 +4,7 @@ use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, Wasm
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
 use cw721::{Cw721ExecuteMsg};
 
-use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS}, ContractError, msg::{UpdateHistoriesMsg}};
+use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, TOKEN_INFOS, UNBONDING, TokenInfo, UNBONDING_DURATION, UNBONDED}, ContractError, msg::{UpdateHistoriesMsg}};
 
 pub const IS_STAKED: bool = true;
 const MIN_CYCLE_LENGTH: u64 = 10;
@@ -89,7 +89,7 @@ pub fn is_valid_period_length(
 }
 
 // make contract message info.
-pub fn _contract_info(
+pub fn contract_info(
     msg: Cw20ReceiveMsg,
 ) -> Result<MessageInfo, ()>{
     let contract_owner_info = MessageInfo {
@@ -128,10 +128,12 @@ pub fn check_contract_owner(
     env: Env,
     config: Config,
 ) -> Result<bool, ContractError> {
+    // contract owner.
     if config.owner == info.sender.to_string() {
         return Ok(true)    
     }
 
+    // granted address by adding contract owner.
     let grants = GRANTS.may_load(deps.storage, info.sender.to_string())?;
     if !grants.is_none() && !grants.unwrap().expires.is_expired(&env.block) {
         return Ok(true)
@@ -162,6 +164,20 @@ pub fn check_disable(
     }
 
     Ok(disable)
+}
+
+// check unbonding status.
+pub fn check_unbonding_end(
+    deps: Deps,   
+    token_info: TokenInfo,
+    timestamp: u64,
+) -> Result<bool, ContractError> {
+    let unbonding_duration = UNBONDING_DURATION.load(deps.storage)?;
+    if !(token_info.bond_status == UNBONDING && timestamp > token_info.req_unbond_time + unbonding_duration) {
+        return Err(ContractError::NotReachUnbondingTime {})
+    }
+
+    Ok(true)
 }
 
 // execute token transfer.
@@ -297,6 +313,7 @@ pub fn compute_rewards(
     now: u64,
     start_timestamp: u64,
     config: Config,
+    token_id: String,
 ) -> Result<(Claim, NextClaim), ContractError> {
     let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.storage)?;
     if periods > max_compute_period {
@@ -321,7 +338,12 @@ pub fn compute_rewards(
         return Ok((claim, next_claim))
     }
 
-    let end_claim_period = get_current_period(now, start_timestamp, config.clone()).unwrap();
+    let mut end_claim_period = get_current_period(now, start_timestamp, config.clone())?;
+
+    let token_info = TOKEN_INFOS.load(deps.storage, token_id)?;
+    if token_info.bond_status == UNBONDING || token_info.bond_status == UNBONDED {
+        end_claim_period = get_current_period(token_info.req_unbond_time, start_timestamp, config.clone())?;
+    }
 
     // current period is not claimable.
     if next_claim.period == end_claim_period {
