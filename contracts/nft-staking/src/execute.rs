@@ -8,7 +8,7 @@ use cw20::{Cw20ReceiveMsg, Expiration};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
-use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, get_current_period, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, contract_info, check_contract_owner_only, check_unbonding_end};
+use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, contract_info, check_contract_owner_only, check_unbonding_end};
 use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
 use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant, UNBONDING_DURATION, UNBONDING, BONDED};
 
@@ -266,6 +266,9 @@ pub fn set_max_compute_period (
     )
 }
 
+// change unbonding_duration that default value is 1814400.
+// when a staker requests to unstake nft token id, the owner of token id is changed to the staker from nft staking contract after unbonding duration.
+// the staker is not able to unstake the nft token id, but also cannot claim rewards when the bond status is "UNBONDING".
 pub fn set_unbonding_duration(
     mut deps: DepsMut,
     info: MessageInfo,
@@ -350,7 +353,7 @@ pub fn enable(
 }
 
 // withdraw rewards pool.
-// the nft staking contract's balance of token rewards which is value of requested amount transfer to contract owner.
+// the nft staking contract's balances of token rewards which is value of requested amount are transferred to contract owner.
 pub fn withdraw_rewards_pool(
     mut deps: DepsMut,
     info: MessageInfo,
@@ -376,7 +379,7 @@ pub fn withdraw_rewards_pool(
 }
 
 // withdraw all rewards pool.
-// the nft staking contract's all balances transfer to contract owner.
+// the nft staking contract's all balances are transferred to contract owner.
 pub fn withdraw_all_rewards_pool(
     mut deps: DepsMut,
     info: MessageInfo,
@@ -453,8 +456,8 @@ pub fn stake_nft(
     let timestamp = env.block.time.seconds();
     let current_cycle = get_cycle(timestamp, start_timestamp, config.clone())?;
 
-    // the nft for staking is managed by mapping staker address and nft token ID.
-    // the staker that stakes multi nft can claim rewards for each nft.
+    // the nft for staking is managed by mapping staker's address and nft token ID.
+    // the staker stakes multi nft and can claim rewards for each nft.
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
 
     let update_histories_response = update_histories(deps.branch(), staker_tokenid_key.clone(), IS_STAKED, current_cycle)?;
@@ -519,6 +522,7 @@ pub fn unstake_nft(
     let timestamp = env.block.time.seconds();
     let is_staked = token_info.clone().is_staked;
 
+    // the bond status of requested nft that is "BONDED" is replaced to "UNBONDING".
     if token_info.bond_status == BONDED {
         let token_info_unbonding = TokenInfo::unstake_unbonding(
             staker.clone(), 
@@ -536,11 +540,23 @@ pub fn unstake_nft(
         )
     }
 
+    // the nft actually is unstaked that nft owner is changed to the staker, 
+    // if the bond status of the nft is "UNBONDING" and current timestamp is bigger than 
+    // sum of requsted unstake time and unbonding duration that is already set up.
     check_unbonding_end(deps.as_ref(), token_info.clone(), timestamp.clone())?; 
 
     let current_cycle = get_cycle(timestamp, start_timestamp, config.clone())?;
     let disable = check_disable(deps.branch())?;
-    let mut claim_rewards_response = Response::new();
+
+    // before unstake the nft by staker, rewards token balances are transfer to staker.
+    let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.branch().storage)?;
+    let mut remain_rewards = true;
+    let mut remain_rewards_value: u128 = 0;
+    let mut recipient: Option<String> = Some(staker.clone());
+    if !claim_recipient_address.is_none() {
+        recipient = claim_recipient_address;
+    }
+
     if !disable {
         // ensure that at least an entire cycle has elapsed before unstaking the token to avoid
         // an exploit where a full cycle would be claimable if staking just before the end
@@ -549,26 +565,34 @@ pub fn unstake_nft(
             return Err(ContractError::TokenSteelFrozen {})
         }
 
-        // before unstake the nft by staker, rewards token balances are transfer to staker.
-        let current_period = get_current_period(timestamp.clone(), start_timestamp.clone(), config.clone()).unwrap();
-        let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), current_period, timestamp, start_timestamp, config.clone(), token_id.clone()).unwrap();
-        if compute_rewards.0.amount != 0 {
-            let mut recipient: Option<String> = None;
-            if !claim_recipient_address.is_none() {
-                recipient = claim_recipient_address;
+        let token_info_unbonded = TokenInfo::unstake_unbonded(
+            staker.clone(), 
+            is_staked, 
+            token_info.clone().deposit_cycle, 
+            token_info.clone().withdraw_cycle,
+            token_info.clone().req_unbond_time,
+        );
+        TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info_unbonded)?;
+
+        while remain_rewards {
+            let compute_reward = compute_rewards(
+                deps.as_ref(), 
+                staker_tokenid_key.clone(), 
+                max_compute_period,
+                timestamp,
+                start_timestamp,
+                config.clone(),
+                token_id.clone()
+            ).unwrap();
+
+            if compute_reward.0.amount != 0 {
+                remain_rewards_value = remain_rewards_value + compute_reward.0.amount;
+                // next claim set last computed rewards.
+                NEXT_CLAIMS.save(deps.branch().storage, staker_tokenid_key.clone(), &compute_reward.1)?;
+            } else {
+                remain_rewards = false
             }
-            let token_info_unbonded = TokenInfo::unstake_unbonded(
-                staker.clone(), 
-                is_staked, 
-                token_info.clone().deposit_cycle, 
-                token_info.clone().withdraw_cycle,
-                token_info.clone().req_unbond_time,
-            );
-            TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info_unbonded)?;
-
-            claim_rewards_response = claim_rewards(deps.branch(), info, env, current_period, token_id.clone(), config.clone(), recipient).unwrap();
         }
-
         update_histories(deps.branch(), staker_tokenid_key.clone(), !is_staked, current_cycle)?;
 
         // clear the token owner to ensure it cannot be unstaked again without being re-staked.
@@ -576,6 +600,13 @@ pub fn unstake_nft(
         let token_info = TokenInfo::unstake(!is_staked, token_info.clone().deposit_cycle, current_cycle);
 
         TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info)?;
+    }
+    let claim_message = execute_token_contract_transfer(config.clone().rewards_token_contract, recipient.clone().unwrap(), remain_rewards_value.clone());
+    match claim_message {
+        Ok(_) => {},
+        Err(e) => {
+            return Err(e)
+        }
     }
 
     // next claims of specified nft are eliminated.
@@ -587,8 +618,9 @@ pub fn unstake_nft(
     Ok(Response::new()
         .add_attribute("method", "unstake_nft")
         .add_attribute("request_unstake_time", timestamp.to_string())
-        .add_attributes(claim_rewards_response.attributes)
-        .add_submessages(claim_rewards_response.messages)
+        .add_attribute("claim_remain_rewards", remain_rewards_value.to_string())
+        .add_attribute("recipient_remain_rewards", recipient.unwrap())
+        .add_messages(claim_message.unwrap())
         .add_messages(message)
     )
 }
@@ -667,6 +699,7 @@ pub fn claim_rewards(
         return Err(ContractError::InvalidClaim {})
     }
 
+    let mut exist_next_claim = true;
     let last_staker_snapshot = staker_history[(staker_history.len() - 1) as usize];
     let last_claimed_cycle = (claim.start_period + claim.periods - 1) * config.period_length_in_cycles;
 
@@ -675,6 +708,7 @@ pub fn claim_rewards(
         
         // re-init the next claim.
         NEXT_CLAIMS.remove(deps.storage, staker_tokenid_key.clone());
+        exist_next_claim = false;
     } else {
         NEXT_CLAIMS.save(deps.storage, staker_tokenid_key.clone(), &new_next_claim)?;
     }
@@ -704,6 +738,7 @@ pub fn claim_rewards(
         .add_attribute("claim_periods", claim.periods.to_string())
         .add_attribute("claim_amount", claim.amount.to_string())
         .add_attribute("claim_recipient", recipient.to_string())
+        .add_attribute("exist_next_claim", exist_next_claim.to_string())
         .add_messages(message.unwrap())
     )
 }

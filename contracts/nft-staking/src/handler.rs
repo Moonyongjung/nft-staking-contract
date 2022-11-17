@@ -193,7 +193,7 @@ pub fn execute_token_contract_transfer(
         contract_addr: rewards_token_contract.to_string(),
         msg: to_binary(&Cw20ExecuteMsg::Transfer { 
             recipient, 
-            amount:  u128_amount,
+            amount: u128_amount,
         })?,
         funds: vec![]
     });
@@ -341,6 +341,9 @@ pub fn compute_rewards(
     let mut end_claim_period = get_current_period(now, start_timestamp, config.clone())?;
 
     let token_info = TOKEN_INFOS.load(deps.storage, token_id)?;
+    
+    // resitrict constantly supplied rewards after the staker requests unbond.
+    // the current period to compute rewards is replaced to requested unbond time.
     if token_info.bond_status == UNBONDING || token_info.bond_status == UNBONDED {
         end_claim_period = get_current_period(token_info.req_unbond_time, start_timestamp, config.clone())?;
     }
