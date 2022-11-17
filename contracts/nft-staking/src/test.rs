@@ -1,52 +1,194 @@
 #[cfg(test)]
 mod tests{
     use std::ops::Add;
-    use std::str::FromStr;
-    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MockApi, MockQuerier};
-    use cosmwasm_std:: {MessageInfo, DepsMut, Env, Empty, MemoryStorage, OwnedDeps, Addr, Uint128, BlockInfo, Timestamp, TransactionInfo, ContractInfo, to_binary, Response, Binary};
-    use cw20::{Cw20Coin, MinterResponse, Cw20ReceiveMsg, Cw20ExecuteMsg};
-    use cw20_base::contract::{instantiate, execute};
+    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MOCK_CONTRACT_ADDR};
+    use cosmwasm_std:: {MessageInfo, DepsMut, Env, Empty, MemoryStorage, OwnedDeps, Addr, Uint128, BlockInfo, Timestamp, TransactionInfo, ContractInfo, to_binary, Response, Binary, CosmosMsg, WasmMsg};
+    use cw20::{Cw20Coin, MinterResponse, Cw20ReceiveMsg, Cw20ExecuteMsg, BalanceResponse, Expiration};
+    use cw20_base::contract::{instantiate, execute, query_balance};
     use cw721::{Cw721ReceiveMsg, Cw721Execute};
     use cw721_base::{Cw721Contract, Extension, InstantiateMsg as Cw721BaseInstantiateMsg, ExecuteMsg as Cw721BaseExecuteMsg, MintMsg};
     use cw20_base::{msg::InstantiateMsg as Cw20InstantiateMsg};
-    use crate::execute::{add_rewards_pool, add_rewards_for_periods, start};
-    use crate::handler::{get_cycle, update_histories, IS_STAKED, get_period, check_start_timestamp, check_disable, staker_tokenid_key, get_current_period, execute_token_contract_transfer};
-    use crate::state::{Config, CONFIG_STATE, TOTAL_REWARDS_POOL, REWARDS_SCHEDULE, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, Claim, STAKER_HISTORIES, Snapshot, MAX_COMPUTE_PERIOD};
+    use crate::execute::{instantiate as nft_staking_instantiate, add_rewards_pool, add_rewards_for_periods, start, grant, set_config, revoke};
+    use crate::handler::{get_cycle, update_histories, IS_STAKED, get_period, check_start_timestamp, check_disable, staker_tokenid_key, get_current_period, manage_number_nfts, check_unbonding_end, compute_rewards};
+    use crate::msg::{InstantiateMsg, SetConfigMsg};
+    use crate::state::{Config, CONFIG_STATE, TOTAL_REWARDS_POOL, REWARDS_SCHEDULE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, MAX_COMPUTE_PERIOD, UNBONDING_DURATION, BONDED, UNBONDING, START_TIMESTAMP};
     use crate::error::ContractError;
 
     const CONTRACT_NAME: &str = "CW721CTRT";
     const SYMBOL: &str = "CW721";
+    const MINTER: &str = "xpla1j55tymfdys9n7k0dq6xmyd4hgfelp9jghzympt";
+    const GRANTER: &str = "xpla1xfdddeclg0r25l0fg5hpm5qfvdqqwz8pumvg0k";
+    const STAKER: &str = "xpla1ma4peq833n2k3t7u2f60w420ltx8nvz0g0vwlu";
+    const TOKEN_ID: &str = "token_id_test_0";
+    const ADD_REWARDS_POOL: u128 = 2000000000;
+    const CYCLE_LENGTH_IN_SECONDS: u64 = 60;
+    const PERIOD_LENGTH_IN_CYCLES: u64 = 3;
+    const REWARDS_PER_CYCLE: u128 = 17;
 
-    fn set_config (
-        deps: DepsMut,
-        info: MessageInfo,
-        cw721_contract: String,
-        cw20_contract: String,
-    ) {
-        let cw721 = cw721_contract;
-        let cw20 = cw20_contract;
-        let config_state = Config {
-            owner: info.sender.clone(),
-            cycle_length_in_seconds: 60,
-            period_length_in_cycles: 3,
-            white_listed_nft_contract: cw721,
-            rewards_token_contract: cw20.to_string(),
+    #[test]
+    fn test_set_config() {
+        // test environment
+        let (mut deps, info, env, _cw721_contract, _cw721_contract_address, config, _staker, _token_id) = test_environment();
+
+        let set_config_msg = SetConfigMsg {
+            cycle_length_in_seconds: Some(100),
+            period_length_in_cycles: None,
+            white_listed_nft_contract: Some("other_cw721_contract".to_string()),
+            rewards_token_contract: None,
         };
 
-        CONFIG_STATE.save(deps.storage, &config_state).unwrap();
-        TOTAL_REWARDS_POOL.save(deps.storage, &0).unwrap();
-        DISABLE.save(deps.storage, &false).unwrap();
-        MAX_COMPUTE_PERIOD.save(deps.storage, &2500).unwrap();
+        // set config test
+        set_config(deps.as_mut(), info, env, config, set_config_msg).unwrap();
+
+        let config = CONFIG_STATE.load(deps.as_mut().storage).unwrap();
+        assert_eq!(config.cycle_length_in_seconds, 100);
+        assert_eq!(config.period_length_in_cycles, PERIOD_LENGTH_IN_CYCLES);
+        assert_eq!(config.white_listed_nft_contract, "other_cw721_contract");
+        assert_eq!(config.rewards_token_contract, mock_env_cw20().contract.address);
     }
 
-    fn get_config(
-        deps: DepsMut,
-    ) -> Result<Config, ()>{
-        let config = CONFIG_STATE.load(deps.storage).unwrap();
+    #[test]
+    fn test_grant_and_revoke() {
+        // test environment
+        let (mut deps, info, env, _cw721_contract, _cw721_contract_address, config, _staker, _token_id) = test_environment();
 
-        Ok(config)
+        let address = GRANTER.to_string();
+        let expiration = Expiration::default();
+
+        // grant
+        grant(deps.as_mut(), info.clone(), config.clone(), address.clone(), Some(expiration)).unwrap();
+
+        let granter_info = mock_info(address.as_str(), &[]);
+        let set_config_msg = SetConfigMsg {
+            cycle_length_in_seconds: Some(100),
+            period_length_in_cycles: None,
+            white_listed_nft_contract: Some("other_cw721_contract".to_string()),
+            rewards_token_contract: None,
+        };
+
+        // check that granter can execute set_config
+        set_config(deps.as_mut(), granter_info.clone(), env.clone(), config.clone(), set_config_msg.clone()).unwrap();
+
+        let config = CONFIG_STATE.load(deps.as_mut().storage).unwrap();
+        assert_eq!(config.cycle_length_in_seconds, 100);
+        assert_eq!(config.period_length_in_cycles, PERIOD_LENGTH_IN_CYCLES);
+        assert_eq!(config.white_listed_nft_contract, "other_cw721_contract");
+        assert_eq!(config.rewards_token_contract, mock_env_cw20().contract.address);
+
+        // revoke
+        revoke(deps.as_mut(), info, config.clone(), address).unwrap();
+
+        // revoked granter cannot execute set_config
+        let result = set_config(deps.as_mut(), granter_info.clone(), env.clone(), config.clone(), set_config_msg.clone());        
+        assert_eq!(ContractError::Unauthorized {}.to_string(), result.err().unwrap().to_string());
     }
 
+    #[test]
+    fn test_add_rewards_for_period() {
+        // test environment
+        let (mut deps, info, env, _cw721_contract, _cw721_contract_address, config, _staker, _token_id) = test_environment();
+
+        let rewards_per_cycle = REWARDS_PER_CYCLE;
+        add_rewards_for_periods(deps.as_mut(), env.clone(), info.clone(), rewards_per_cycle.clone(), config.clone()).unwrap();
+
+        // normal case
+        let rewards_schedule = REWARDS_SCHEDULE.load(deps.as_mut().storage).unwrap();
+        assert_eq!(REWARDS_PER_CYCLE, rewards_schedule);
+
+        // error case that rewards per cycle is zero
+        let rewards_per_cycle: u128 = 0;
+        let result = add_rewards_for_periods(deps.as_mut(), env.clone(), info.clone(), rewards_per_cycle.clone(), config.clone());
+        assert_eq!(ContractError::InvalidRewardsSchedule {}.to_string(), result.err().unwrap().to_string())
+    }
+
+    #[test]
+    fn test_stake() {
+        do_stake();
+    }
+
+    #[test]
+    fn test_claim() {
+        let (mut deps, _info, env, _cw721_contract, _cw721_contract_address, config, staker, token_id) = do_stake();
+
+        let timestamp = env.block.time.seconds() + 5000;
+        let staker_info = mock_info(staker.as_str(), &[]);
+        let request_claim_period = 5;
+        let claim_recipient_address = None;
+        let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
+
+        // claim
+        let res = claim_rewards_function(deps.as_mut(), staker_info.clone(), env.clone(), request_claim_period, token_id.clone(), config.clone(), claim_recipient_address.clone(), timestamp.clone());
+
+        // --------------------------------
+        // check after run claim function
+        let staker_rewards = query_balance(deps.as_ref(), staker.clone()).unwrap();
+        let contract_balance = query_balance(deps.as_ref(), env.contract.address.to_string()).unwrap();
+        let next_claim = NEXT_CLAIMS.load(deps.as_mut().storage, staker_tokenid_key.clone()).unwrap();
+        
+        // deposit cycle = 1.
+        // cycle length in seconds is 60 and period length in cycles is 3 for test.
+        // rewards per cycle is 17.
+        // rewards is sufficient because of a lot of time passed after staked.
+        // request claim period is 5.
+
+        // the equation of claimable rewards value = 5 * 3 * 17 = 255
+        // and next claim is 6 because rewards are claimed until period 5.
+        assert_eq!(255, staker_rewards.balance.u128());
+        assert_eq!(1999999745, contract_balance.balance.u128());
+        assert_eq!(6, next_claim.period);
+        assert_eq!(res.attributes.get(2).unwrap().value, staker);
+        assert_eq!(res.attributes.get(3).unwrap().value, 255.to_string());
+    }
+
+    #[test]
+    fn test_unstake() {
+        // do stake
+        let (mut deps, _info, env, cw721_contract, _cw721_contract_address, config, staker, token_id) = do_stake();
+        
+        let staker_info = mock_info(STAKER, &[]);
+        let timestamp = env.block.time.seconds() + 2000;
+
+        // not claim to other address
+        let claim_recipient_address = None;
+
+        // request unbond nft
+        test_unstake_function(deps.as_mut(), env.clone(), staker_info.clone(), config.clone(), token_id.clone(), claim_recipient_address.clone(), timestamp.clone());
+
+        // requested unbonding period value
+        let start_timestamp = START_TIMESTAMP.load(deps.as_mut().storage).unwrap();
+        let requested_unbonding_period = get_current_period(timestamp, start_timestamp, config.clone()).unwrap();
+
+        let unbonding_duration = UNBONDING_DURATION.load(deps.as_mut().storage).unwrap();
+        assert_eq!(unbonding_duration, 1814400);
+
+        // current time is after sum of timestamp and unbonding duration + 1 
+        let timestamp = timestamp + unbonding_duration + 1;
+
+        // re-request unstake the nft has "UNBONDED" as bond_status
+        test_unstake_function(deps.as_mut(), env.clone(), staker_info.clone(), config.clone(), token_id.clone(), claim_recipient_address.clone(), timestamp.clone());
+
+        // for test, seperate executing transfer nft and unstake function.
+        test_execute_transfer_nft_unstake(deps.as_mut(), env.clone(), staker.clone(), token_id, cw721_contract);
+
+        // --------------------------------
+        // check after run unstake function
+        let staker_rewards = query_balance(deps.as_ref(), staker).unwrap();
+        let contract_balance = query_balance(deps.as_ref(), env.contract.address.to_string()).unwrap();
+
+        // deposit cycle = 1.
+        // cycle length in seconds is 60 and period length in cycles is 3 for test.
+        // requested unbonding time is now + 2000 seconds.
+        // requested unbonding period that requested unbonding time is included is 12 (last cycle second is 2,160) and previous period that is claimable period is 11(last cycle second is 1,980).
+        // rewards per cycle is 17.
+        // so, the equation of claimable rewards value = 1980 / 60 * 17 = 561
+        // nft staking contract's rewards pool (i.e. cw20 token balance of contract) is 2000000000 - 561 = 1999999439
+        
+        assert_eq!(12, requested_unbonding_period);
+        assert_eq!(561, staker_rewards.balance.u128());
+        assert_eq!(1999999439, contract_balance.balance.u128());
+    }
+
+    // test helpers
     fn test_environment()
     ->  (
             OwnedDeps<MemoryStorage, MockApi, MockQuerier>,
@@ -58,18 +200,23 @@ mod tests{
             String,
             String,
         ) {
-        let minter = String::from("xpla1j55tymfdys9n7k0dq6xmyd4hgfelp9jghzympt");
+        let minter = String::from(MINTER);
+        let staker = String::from(STAKER);
+        let token_id = String::from(TOKEN_ID);
 
-        let staker = "xpla1ma4peq833n2k3t7u2f60w420ltx8nvz0g0vwlu".to_string();
-        let token_id = "token_id_test_0".to_string();
+        let add_rewards = Uint128::from(ADD_REWARDS_POOL);
+        let send_msg = Binary::from(r#"{add_rewards}"#.as_bytes());
 
+        // nft staking contract
         let mut deps = mock_dependencies();
         let info = mock_info(minter.as_ref(), &[]);
         let env = mock_env();
 
-        let cw721_contract = setup_contract(deps.as_mut());
-        let cw721_contract_address = mock_env().contract.address;
+        // cw721 contract
+        let cw721_contract = setup_contract_cw721(deps.as_mut());
+        let cw721_contract_address = mock_env_cw721().contract.address;
 
+        // mint nft token ID
         let mint_msg = Cw721BaseExecuteMsg::Mint(MintMsg::<Extension> {
             token_id: token_id.clone(),
             owner: staker.clone(),
@@ -77,53 +224,95 @@ mod tests{
             extension: None,
         });
         cw721_contract
-            .execute(deps.as_mut(), mock_env(), info.clone(), mint_msg)
+            .execute(deps.as_mut(), mock_env_cw721(), info.clone(), mint_msg)
             .unwrap();
 
+        // cw20 contract
         setup_contract_cw20(deps.as_mut());
-        let cw20_contract_address = mock_env_cw20().contract.address;
+        let cw20_contract_address = mock_env_cw20().clone().contract.address;
 
-        // set config of nft staking contract
-        set_config(deps.as_mut(), info.clone(), cw721_contract_address.to_string(), cw20_contract_address.to_string());
+        // instantiate
+        let instantiate_res = do_instantiate(deps.as_mut(), info.clone(), env.clone(), cw721_contract_address.clone().to_string(), cw20_contract_address.clone().to_string());
+        assert_eq!(instantiate_res.attributes.get(0).unwrap().value, "instantiate");
+        assert_eq!(instantiate_res.attributes.get(1).unwrap().value, minter);
+        assert_eq!(instantiate_res.attributes.get(2).unwrap().value, CYCLE_LENGTH_IN_SECONDS.to_string());
+        assert_eq!(instantiate_res.attributes.get(3).unwrap().value, PERIOD_LENGTH_IN_CYCLES.to_string());
+        assert_eq!(instantiate_res.attributes.get(4).unwrap().value, cw721_contract_address.clone());
+        assert_eq!(instantiate_res.attributes.get(5).unwrap().value, cw20_contract_address.clone());
+
         let config = get_config(deps.as_mut()).unwrap();
 
-        let rewards_per_cycle: u128 = 17;
-        let add_rewards_schedule = add_rewards_for_periods(deps.as_mut(), env.clone(), info.clone(), rewards_per_cycle, config.clone()).unwrap();
-        
-        // method
+        // set reward schedule includes rewards_per_cycle
+        let add_rewards_schedule = add_rewards_for_periods(deps.as_mut(), env.clone(), info.clone(), REWARDS_PER_CYCLE, config.clone()).unwrap();
         assert_eq!(add_rewards_schedule.attributes.get(0).unwrap().value, "add_rewards_for_periods");
-        // rewards_per_cycle
-        assert_eq!(add_rewards_schedule.attributes.get(1).unwrap().value, "17");
+        assert_eq!(add_rewards_schedule.attributes.get(1).unwrap().value, REWARDS_PER_CYCLE.to_string());
 
-        let add_rewards = Uint128::from_str("2000000000").unwrap();
-        let send_msg = Binary::from(r#"{add_rewards}"#.as_bytes());
-
+        // minter sends cw20 tokens to contract for supplying rewards pool
         let msg = Cw20ExecuteMsg::Send {
             contract: env.contract.address.clone().to_string(),
             amount: add_rewards.clone(),
             msg: send_msg.clone(),
         };
-        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg.clone()).unwrap();
+        let res = execute(deps.as_mut(), mock_env_cw20().clone(), info.clone(), msg.clone()).unwrap();
         assert_eq!(res.messages.len(), 1);
 
+        // received msg
         let msg = Cw20ReceiveMsg {
             sender: minter.clone(),
             amount: add_rewards.clone(),
             msg: send_msg.clone()
         };
+
+        let cm_msg: CosmosMsg<Empty> = CosmosMsg::Wasm(WasmMsg::Execute { 
+            contract_addr: MOCK_CONTRACT_ADDR.to_string(), 
+            msg: msg.clone().into_binary().unwrap(), 
+            funds: vec![]
+        });
+
+        assert_eq!(res.messages[0].msg, cm_msg);
+
         let cw20_info = mock_info(cw20_contract_address.as_str(), &[]);
         let add_rewards_pool = add_rewards_pool(deps.as_mut(), cw20_info.clone(), env.clone(), config.clone(), msg).unwrap();
+
+        // check balance as token rewards pool of nft staking contract
+        let balance_response = test_query_rewards_token_balance(deps.as_mut(), env.clone().contract.address.to_string());
+        assert_eq!(balance_response.balance, add_rewards);
 
         // method
         assert_eq!(add_rewards_pool.attributes.get(0).unwrap().value, "add_rewards_pool");        
         // added_rewards
-        assert_eq!(add_rewards_pool.attributes.get(1).unwrap().value, "2000000000");
+        assert_eq!(add_rewards_pool.attributes.get(1).unwrap().value, ADD_REWARDS_POOL.to_string());
         // total_rewards
-        assert_eq!(add_rewards_pool.attributes.get(2).unwrap().value, "2000000000");
+        assert_eq!(add_rewards_pool.attributes.get(2).unwrap().value, ADD_REWARDS_POOL.to_string());
 
         contract_test_start(deps.as_mut(), info.clone(), env.clone(), config.clone());
 
         return (deps, info, env, cw721_contract, cw721_contract_address, config, staker, token_id)
+    }
+
+    fn do_instantiate(
+        deps: DepsMut,
+        info: MessageInfo,
+        env: Env,
+        white_listed_nft_contract: String,
+        rewards_token_contract: String,
+    ) -> Response {
+        let msg = InstantiateMsg {
+            owner: MINTER.to_string(),
+            cycle_length_in_seconds: CYCLE_LENGTH_IN_SECONDS,
+            period_length_in_cycles: PERIOD_LENGTH_IN_CYCLES,
+            white_listed_nft_contract,
+            rewards_token_contract
+        };
+        return nft_staking_instantiate(deps, env, info, msg).unwrap();        
+    }    
+
+    fn get_config(
+        deps: DepsMut,
+    ) -> Result<Config, ()>{
+        let config = CONFIG_STATE.load(deps.storage).unwrap();
+
+        Ok(config)
     }
 
     fn contract_test_start(
@@ -135,28 +324,28 @@ mod tests{
         start(deps, info, env, config).unwrap();
     }
 
-    fn setup_contract(deps: DepsMut<'_>) -> Cw721Contract<'static, Extension, Empty, Empty, Empty> {
+    fn setup_contract_cw721(deps: DepsMut<'_>) -> Cw721Contract<'static, Extension, Empty, Empty, Empty> {
         let contract = Cw721Contract::default();
         let msg = Cw721BaseInstantiateMsg {
             name: CONTRACT_NAME.to_string(),
             symbol: SYMBOL.to_string(),
-            minter: String::from("xpla1j55tymfdys9n7k0dq6xmyd4hgfelp9jghzympt"),
+            minter: String::from(MINTER),
         };
         let info = mock_info("creator", &[]);
-        let res = contract.instantiate(deps, mock_env(), info, msg).unwrap();
+        let res = contract.instantiate(deps, mock_env_cw721(), info, msg).unwrap();
         assert_eq!(0, res.messages.len());
         contract
     }
 
     fn setup_contract_cw20(deps: DepsMut<'_>) {
-        let addr = String::from("xpla1j55tymfdys9n7k0dq6xmyd4hgfelp9jghzympt");
+        let addr = String::from(MINTER);
         let amount = Uint128::new(200000000000);
-        let minter = String::from("xpla1j55tymfdys9n7k0dq6xmyd4hgfelp9jghzympt");
+        let minter = String::from(MINTER);
         let limit = Uint128::new(400000000000);
 
         let instantiate_msg = Cw20InstantiateMsg {
-            name: "Auto Gen".to_string(),
-            symbol: "AUTO".to_string(),
+            name: "REWARDSCTRT".to_string(),
+            symbol: "RWRD".to_string(),
             decimals: 18,
 
             initial_balances: vec![Cw20Coin {
@@ -177,6 +366,20 @@ mod tests{
 
     }
 
+    pub fn mock_env_cw721() -> Env {
+        Env {
+            block: BlockInfo {
+                height: 12_345,
+                time: Timestamp::from_nanos(1_571_797_419_879_305_533),
+                chain_id: "cosmos-testnet-14002".to_string(),
+            },
+            transaction: Some(TransactionInfo { index: 3 }),
+            contract: ContractInfo {
+                address: Addr::unchecked("cosmos2contract_cw721"),
+            },
+        }
+    }
+
     pub fn mock_env_cw20() -> Env {
         Env {
             block: BlockInfo {
@@ -191,35 +394,37 @@ mod tests{
         }
     }
 
-    #[test]
-    fn test_add_rewards_for_periods() {
-        let minter = String::from("xpla1j55tymfdys9n7k0dq6xmyd4hgfelp9jghzympt");
-
-        let mut deps = mock_dependencies();
-        let info = mock_info(minter.as_ref(), &[]);
-        let env = mock_env();
-        let cw20_env = mock_env_cw20();
-
-        set_config(deps.as_mut(), info.clone(), env.contract.address.to_string(), cw20_env.contract.address.to_string());
-        let rewards_per_cycle: u128 = 17;
-
-        REWARDS_SCHEDULE.save(deps.as_mut().storage, &rewards_per_cycle).unwrap();
+    pub fn test_query_rewards_token_balance(
+        deps: DepsMut,
+        address: String,
+    ) -> BalanceResponse {
+        let balance_response = query_balance(deps.as_ref(), address).unwrap();
+        balance_response
     }
 
-    #[test]
-    fn test_stake() {
+    fn do_stake() -> (
+        OwnedDeps<MemoryStorage, MockApi, MockQuerier>,
+        MessageInfo,
+        Env,
+        Cw721Contract<'static, Extension, Empty, Empty, Empty>,
+        Addr,
+        Config,
+        String,
+        String,
+    ) {
         // test environment
         let (mut deps, info, env, cw721_contract, cw721_contract_address, config, staker, token_id) = test_environment();
         let staker_info = mock_info(staker.as_str(), &[]);
         let msg = to_binary( "send nft to stake").unwrap();
         let res = cw721_contract.send_nft(deps.as_mut(), env.clone(), staker_info.clone(), env.contract.address.clone().to_string(), token_id.clone(), msg.clone()).unwrap();
 
+        // expected Cw721ReceiveMsg after sendNft
         let payload = Cw721ReceiveMsg {
             sender: staker.to_string(),
             token_id: token_id.clone(),
             msg,
         };
-        let expected = payload.into_cosmos_msg(env.contract.address.clone()).unwrap();
+        let expected = payload.clone().into_cosmos_msg(env.contract.address.clone()).unwrap();
         assert_eq!(
             res,
             Response::new()
@@ -231,252 +436,223 @@ mod tests{
         );
 
         let timestamp = env.block.time.seconds();
-        stake_function(deps.as_mut(), info, env, timestamp, cw721_contract_address, config, staker, token_id);
-    }
 
+        let cw721_info = mock_info(cw721_contract_address.as_str(), &[]);
+        stake_function(deps.as_mut(), cw721_info, env.clone(), timestamp, config.clone(), payload);
+
+        return (deps, info, env, cw721_contract, cw721_contract_address, config, staker, token_id)
+    }
 
     fn stake_function(
         mut deps: DepsMut,
-        _info: MessageInfo,
-        _env: Env,
+        info: MessageInfo,
+        env: Env,
         timestamp: u64,
-        _cw721_contract_address: Addr,
         config: Config,
-        staker: String,
-        token_id: String,
+        msg: Cw721ReceiveMsg,
     ) {
+        // total rewards pool
+        let total_rewards_pool = TOTAL_REWARDS_POOL.may_load(deps.branch().storage).unwrap();
+        assert_eq!(ADD_REWARDS_POOL, total_rewards_pool.unwrap());
+
+        // balance of nft staking contract
+        let address = env.contract.address.to_string();
+        let balance_response = test_query_rewards_token_balance(deps.branch(), address.clone());
+        assert_eq!(ADD_REWARDS_POOL, balance_response.balance.u128());
+
+        // check rewards schedule
+        let rewards_schedule = REWARDS_SCHEDULE.may_load(deps.branch().storage).unwrap();
+        assert!(!rewards_schedule.is_none());
+
+        // whitelisted nft contract only send nft
+        assert_eq!(info.sender.to_string(), config.clone().white_listed_nft_contract);        
+
+        // check started and disabled
         let start_timestamp = check_start_timestamp(deps.branch()).unwrap();
-        
         check_disable(deps.branch()).unwrap();
 
+        let staker = msg.sender;
+        let token_id = msg.token_id;
+        assert_eq!(staker, STAKER.to_string());
+        assert_eq!(token_id, TOKEN_ID.to_string());
+
+        // time stamp is temp value
+        // let timestamp = env.block.time.seconds();
         let current_cycle = get_cycle(timestamp, start_timestamp, config.clone()).unwrap();
         let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
+        assert_eq!(staker_tokenid_key, STAKER.to_string().add("@").add(token_id.as_str()));
 
+        // save staker history
         let update_histories_response = update_histories(deps.branch(), staker_tokenid_key.clone(), IS_STAKED, current_cycle).unwrap();
-        assert_eq!(update_histories_response.staker, "xpla1ma4peq833n2k3t7u2f60w420ltx8nvz0g0vwlu@token_id_test_0");
-        assert_eq!(update_histories_response.staker_histories_stake, true);
-
-        let next_claims = NEXT_CLAIMS.may_load(deps.branch().storage, staker_tokenid_key.clone()).unwrap();
-
-        if next_claims.is_none() {
-            let current_period = get_period(current_cycle, config.clone()).unwrap();
-            let new_next_claim = NextClaim::new(current_period, 0);
-
-            NEXT_CLAIMS.save(deps.branch().storage, staker_tokenid_key.clone(), &new_next_claim).unwrap();
-        }
+        assert_eq!(update_histories_response.staker, staker_tokenid_key);
 
         let token_infos = TOKEN_INFOS.may_load(deps.branch().storage, token_id.clone()).unwrap();
-        if !token_infos.is_none(){
-            let withdraw_cycle = token_infos.unwrap().withdraw_cycle;
+        if !token_infos.is_none() {
+            // prevent duplication.
+            assert!(!token_infos.clone().unwrap().is_staked);
             
-            assert_ne!(current_cycle, withdraw_cycle);
-            if current_cycle == withdraw_cycle {
-                println!("{:?}", ContractError::UnstakedTokenCooldown {}.to_string());
-            }    
+            let withdraw_cycle = token_infos.unwrap().withdraw_cycle;
+            // cannot re-stake when current cycle of block time is same setup withdraw cycle
+            assert_ne!(current_cycle, withdraw_cycle)
+        }
+
+        let next_claims = NEXT_CLAIMS.may_load(deps.branch().storage, staker_tokenid_key.clone()).unwrap();
+        if next_claims.is_none() {
+            let current_period = get_period(current_cycle, config.clone()).unwrap();
+            let new_next_claim = NextClaim::new(current_period, 0);            
+
+            NEXT_CLAIMS.save(deps.branch().storage, staker_tokenid_key.clone(), &new_next_claim).unwrap();            
         }
 
         let new_token_info = TokenInfo::stake(staker.clone(), IS_STAKED, current_cycle);
+        assert_eq!(new_token_info.owner, STAKER.to_string());
+        assert!(new_token_info.is_staked);
+        assert_eq!(new_token_info.bond_status, BONDED);
         
-        TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &new_token_info).unwrap();
+        TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &new_token_info).unwrap();        
+        manage_number_nfts(deps.branch(), true);
     }
 
-    #[test]
-    fn test_unstake () {
-        let (mut deps, info, env, cw721_contract,cw721_contract_address, config, staker, token_id) = test_environment();
-
-        let staker_info = mock_info(staker.as_str(), &[]);
-        let msg = to_binary( "send nft to stake").unwrap();
-        cw721_contract.send_nft(deps.as_mut(), env.clone(), staker_info.clone(), env.contract.address.clone().to_string(), token_id.clone(), msg.clone()).unwrap();
-        
-        let timestamp = env.block.time.seconds();
-        stake_function(deps.as_mut(), info.clone(), env.clone(), timestamp.clone(), cw721_contract_address.clone(), config.clone(), staker.clone(), token_id.clone());
-
-        let timestamp = timestamp + 2000;
-        unstake_function(deps.as_mut(), info, env, cw721_contract_address, config, staker, token_id, timestamp);
-    }
-
-    fn unstake_function(
+    pub fn test_unstake_function(
         mut deps: DepsMut,
-        _info: MessageInfo,
         env: Env,
-        _cw721_contract_address: Addr,
+        info: MessageInfo,
         config: Config,
-        staker: String,
         token_id: String,
+        claim_recipient_address: Option<String>,
         timestamp: u64,
     ) {
-        // unstake test
+        let staker = info.clone().sender.to_string();
         let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
+        let token_info = TokenInfo::check_staker(deps.branch(), info.clone(), token_id.clone()).unwrap();
 
-        let token_infos = TOKEN_INFOS.may_load(deps.branch().storage, token_id.clone()).unwrap();
-        assert_eq!(token_infos.is_none(), false);
-        assert_eq!(token_infos.clone().unwrap().owner, staker);
-
+        // compare token info in the state and check staker
+        let check_token_info = TOKEN_INFOS.load(deps.branch().storage, token_id.clone()).unwrap();
+        assert_eq!(token_info, check_token_info);
+    
         let start_timestamp = check_start_timestamp(deps.branch()).unwrap();
+        // the timestamp is temp value which is input of function
+        // let timestamp = env.block.time.seconds();
+        let is_staked = token_info.clone().is_staked;
+    
+        // the bond status of requested nft that is "BONDED" is replaced to "UNBONDING".
+        if token_info.bond_status == BONDED {
+            let token_info_unbonding = TokenInfo::unstake_unbonding(
+                staker.clone(), 
+                is_staked, 
+                token_info.clone().deposit_cycle, 
+                token_info.clone().withdraw_cycle,
+                timestamp.clone(),
+            );
+            TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info_unbonding).unwrap();
+    
+            // check token id's bond status
+            let check_token_info = TOKEN_INFOS.load(deps.branch().storage, token_id.clone()).unwrap();
+            assert_eq!(check_token_info.bond_status, UNBONDING);
+
+            return
+        }
+
+        check_unbonding_end(deps.as_ref(), token_info.clone(), timestamp.clone()).unwrap(); 
+
         let current_cycle = get_cycle(timestamp, start_timestamp, config.clone()).unwrap();
-        let is_staked = token_infos.clone().unwrap().is_staked;
-
         let disable = check_disable(deps.branch()).unwrap();
+
+        let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.branch().storage).unwrap();
+        let mut remain_rewards = true;
+        let mut remain_rewards_value: u128 = 0;
+        let mut recipient: Option<String> = Some(staker.clone());
+        if !claim_recipient_address.is_none() {
+            recipient = claim_recipient_address;
+        }
+
         if !disable {
-            assert!((current_cycle - token_infos.clone().unwrap().deposit_cycle >= 2));
+            assert!(current_cycle - token_info.clone().deposit_cycle >= 2);
 
-            let current_period = get_current_period(timestamp.clone(), start_timestamp.clone(), config.clone()).unwrap();
-            let compute_rewards = compute_rewards_function(deps.branch(), staker_tokenid_key.clone(), current_period, timestamp, start_timestamp, config.clone());
+            let token_info_unbonded = TokenInfo::unstake_unbonded(
+                staker.clone(), 
+                is_staked, 
+                token_info.clone().deposit_cycle, 
+                token_info.clone().withdraw_cycle,
+                token_info.clone().req_unbond_time,
+            );
+            TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info_unbonded).unwrap();
 
-            if compute_rewards.0.amount != 0 {
-                let info = mock_info(staker.as_ref(), &[]);
-                claim_rewards_function(deps.branch(), info, env, current_period, token_id.clone(), config.clone(), timestamp);
+            while remain_rewards {
+                let compute_reward = compute_rewards(
+                    deps.as_ref(), 
+                    staker_tokenid_key.clone(), 
+                    max_compute_period,
+                    timestamp,
+                    start_timestamp,
+                    config.clone(),
+                    token_id.clone()
+                ).unwrap();
+
+                if compute_reward.0.amount != 0 {
+                    remain_rewards_value = remain_rewards_value + compute_reward.0.amount;
+                    // next claim set last computed rewards.
+                    NEXT_CLAIMS.save(deps.branch().storage, staker_tokenid_key.clone(), &compute_reward.1).unwrap();
+                } else {
+                    remain_rewards = false
+                }
             }
+            update_histories(deps.branch(), staker_tokenid_key.clone(), !is_staked, current_cycle).unwrap();
 
-            let update_histories_response = update_histories(deps.branch(), staker_tokenid_key.clone(), !is_staked, current_cycle).unwrap();
-            assert_eq!(update_histories_response.staker, "xpla1ma4peq833n2k3t7u2f60w420ltx8nvz0g0vwlu@token_id_test_0");
-            assert_eq!(update_histories_response.staker_histories_stake, false);
-
-            let token_info = TokenInfo::unstake(!is_staked, token_infos.clone().unwrap().deposit_cycle, current_cycle);
+            let token_info = TokenInfo::unstake(!is_staked, token_info.clone().deposit_cycle, current_cycle);
 
             TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info).unwrap();
         }
 
+        // for test, execute token contract trasfer
+        let res = test_execute_token_contract_transfer(deps.branch(), env.clone(), info.clone(), recipient.clone().unwrap(), remain_rewards_value);
+        assert_eq!(staker, res.attributes.get(2).unwrap().value);
+        assert_eq!(remain_rewards_value.to_string(), res.attributes.get(3).unwrap().value);
+
         NEXT_CLAIMS.remove(deps.branch().storage, staker_tokenid_key.clone());
+        manage_number_nfts(deps.branch(), false);
     }
 
-    #[test]
-    fn test_compute_rewards() {
-        let (mut deps, info, env, cw721_contract, cw721_contract_address, config, staker, token_id) = test_environment();
-        
-        let staker_info = mock_info(staker.as_str(), &[]);
-        let contract_info = mock_info(cw721_contract_address.as_str(), &[]);
-        let msg = to_binary( "send nft to stake").unwrap();
-        cw721_contract.send_nft(deps.as_mut(), env.clone(), staker_info.clone(), env.contract.address.clone().to_string(), token_id.clone(), msg.clone()).unwrap();
+    fn test_execute_token_contract_transfer(
+        deps: DepsMut,
+        env: Env,
+        _info: MessageInfo,
+        recipient: String,
+        amount: u128,
+    ) -> Response {
+        let nft_staking_contract_info = mock_info(env.contract.address.as_str(), &[]);
 
-        // stake nft
-        let timestamp = env.block.time.seconds();
-        stake_function(deps.as_mut(), info.clone(), env.clone(), timestamp, cw721_contract_address.clone(), config.clone(), staker.clone(), token_id.clone());
-
-        let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
-        let periods = 1000;
-
-        // in config, 1 period is 180 sec
-        let now = env.block.time.seconds() + 180;
-        let start_timestamp = check_start_timestamp(deps.as_mut()).unwrap();
-
-        // compute rewards
-        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), periods.clone(), now.clone(), start_timestamp.clone(), config.clone());
-
-        // comput rewards after 200 seconds
-        let now = now + 200;
-        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), periods.clone(), now.clone(), start_timestamp.clone(), config.clone());
-
-        // unstake
-        let timestamp = now + 1;
-        unstake_function(deps.as_mut(), info.clone(), env.clone(), cw721_contract_address.clone(), config.clone(), staker.clone(), token_id.clone(), timestamp);
-        cw721_contract.transfer_nft(deps.as_mut(), env.clone(), contract_info.clone(), staker.clone(), token_id.clone()).unwrap();
-
-        // re stake
-        let timestamp = timestamp + 120;
-        cw721_contract.send_nft(deps.as_mut(), env.clone(), staker_info.clone(), env.contract.address.clone().to_string(), token_id.clone(), msg.clone()).unwrap();
-        stake_function(deps.as_mut(), info.clone(), env.clone(), timestamp, cw721_contract_address.clone(), config.clone(), staker.clone(), token_id.clone());
-
-        // compute rewards after 180 seconds from re-stake
-        let now = timestamp + 180;
-        compute_rewards_function(deps.as_mut(), staker_tokenid_key.clone(), periods.clone(), now.clone(), start_timestamp.clone(), config.clone());
+        let msg = Cw20ExecuteMsg::Transfer { 
+            recipient: recipient, 
+            amount: Uint128::from(amount)
+        };
+        let res = execute(deps, mock_env_cw20().clone(), nft_staking_contract_info.clone(), msg.clone()).unwrap();
+        return res
     }
 
-    fn compute_rewards_function(
-        mut deps: DepsMut,
-        staker_tokenid_key: String,
-        periods: u64,
-        now: u64,
-        start_timestamp: u64,
-        config: Config,
-    ) -> (Claim, NextClaim) {
+    fn test_execute_transfer_nft_unstake(
+        deps: DepsMut,
+        env: Env,
+        recipient: String,
+        token_id: String,
+        cw721_contract: Cw721Contract<'static, Extension, Empty, Empty, Empty>,
+    ) -> Response {
+        let nft_staking_contract_info = mock_info(env.contract.address.as_str(), &[]);
 
-        let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.storage).unwrap();
-        assert!(periods < max_compute_period);
-
-        let mut claim = Claim::default();
-    
-        assert_ne!(periods, 0);
-
-        let mut next_claim = NEXT_CLAIMS.may_load(deps.branch().storage, staker_tokenid_key.clone()).unwrap().unwrap();
-        claim.start_period = next_claim.period;
-        assert_ne!(claim.start_period, 0);
-    
-        let end_claim_period = get_current_period(now, start_timestamp, config.clone()).unwrap();
-        assert_ne!(next_claim.period, end_claim_period);
-
-        let staker_history = STAKER_HISTORIES.may_load(deps.storage, staker_tokenid_key.clone()).unwrap().unwrap();
-        assert!(staker_history[0].is_staked);
-    
-        let s_state_data = staker_history[next_claim.clone().staker_snapshot_index as usize].clone();
-        let mut staker_snapshot = Snapshot::new(s_state_data.is_staked, s_state_data.start_cycle);
-    
-        let mut next_staker_snapshot = Snapshot::default();
-    
-        if next_claim.staker_snapshot_index != staker_history.clone().len() as u64 - 1 {
-            let s_data = &staker_history.clone()[(next_claim.staker_snapshot_index + 1) as usize];
-            next_staker_snapshot = Snapshot::new(s_data.is_staked, s_data.start_cycle);
-        }
-    
-        claim.periods = end_claim_period - next_claim.period;
-        if periods < claim.periods {
-            claim.periods = periods;
-        }
-    
-        let end_claim_period = next_claim.period + claim.periods;
-    
-        while next_claim.period != end_claim_period {
-            let next_period_start_cycle = next_claim.period * config.clone().period_length_in_cycles + 1;
-            let reward_per_cycle = REWARDS_SCHEDULE.may_load(deps.storage).unwrap();
-            assert!(!reward_per_cycle.is_none());
-
-            let reward_per_cycle = reward_per_cycle.unwrap();
-    
-            let mut start_cycle = next_period_start_cycle - config.clone().period_length_in_cycles;
-            let mut end_cycle = 0;
-    
-            while end_cycle != next_period_start_cycle {
-                if staker_snapshot.start_cycle > start_cycle {
-                    start_cycle = staker_snapshot.start_cycle;
-                }
-    
-                end_cycle = next_period_start_cycle;
-                if staker_snapshot.is_staked && reward_per_cycle != 0 {
-                    let mut snapshot_reward = (end_cycle - start_cycle) as u128 * reward_per_cycle;
-                    snapshot_reward = snapshot_reward;
-                    claim.amount = claim.amount.add(snapshot_reward)
-                }
-    
-                if next_staker_snapshot.start_cycle == end_cycle {
-                    staker_snapshot = next_staker_snapshot;
-                    next_claim.staker_snapshot_index = next_claim.staker_snapshot_index + 1;
-    
-                    if next_claim.staker_snapshot_index != (staker_history.len() - 1) as u64 {
-                        next_staker_snapshot = staker_history[(next_claim.staker_snapshot_index + 1) as usize];
-                    } else {
-                        next_staker_snapshot = Snapshot {
-                            is_staked: false,
-                            start_cycle: 0,
-                        }
-                    }
-                }
-            }
-            next_claim.period = next_claim.period + 1;   
-        }
-
-        (claim, next_claim)
-
+        let res = cw721_contract.transfer_nft(deps, mock_env_cw721(), nft_staking_contract_info, recipient, token_id).unwrap();
+        return res
     }
 
     fn claim_rewards_function(
         mut deps: DepsMut,
         info: MessageInfo,
-        _env: Env,
+        env: Env,
         periods: u64,
         token_id: String,
         config: Config,
+        claim_recipient_address: Option<String>,
         timestamp: u64,
-    ){
+    ) -> Response{
         let start_timestamp = check_start_timestamp(deps.branch()).unwrap();
         check_disable(deps.branch()).unwrap();
 
@@ -489,7 +665,7 @@ mod tests{
         let next_claim = next_claim.unwrap();
         let now = timestamp;
 
-        let compute_rewards = compute_rewards_function(deps.branch(), staker_tokenid_key.clone(), periods, now, start_timestamp, config.clone());
+        let compute_rewards = compute_rewards(deps.as_ref(), staker_tokenid_key.clone(), periods, now, start_timestamp, config.clone(), token_id.clone()).unwrap();
 
         let claim = compute_rewards.0;
         let new_next_claim = compute_rewards.1;
@@ -517,7 +693,11 @@ mod tests{
 
         assert_ne!(claim.amount, 0);
 
-        execute_token_contract_transfer(config.rewards_token_contract, staker, claim.amount).unwrap();
-        
+        let mut recipient = staker;
+        if !claim_recipient_address.is_none() {
+            recipient = claim_recipient_address.unwrap();
+        }
+
+        return test_execute_token_contract_transfer(deps.branch(), env.clone(), info.clone(), recipient, claim.amount);
     }
 }
