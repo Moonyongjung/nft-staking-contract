@@ -4,8 +4,8 @@ use cosmwasm_std::{to_binary, Binary, Env, StdResult, Deps, QueryRequest, WasmQu
 use cw20::Expiration;
 use cw721::{Cw721QueryMsg, AllNftInfoResponse, OwnerOfResponse, NftInfoResponse, Approval};
 use cw721_base::Extension;
-use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance};
-use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse, StakedNftsByOwnerResponse, TokenInfoMsg, GetGrantsResponse, UnbondingDurationResponse};
+use crate::handler::{compute_rewards, staker_tokenid_key, query_rewards_token_balance, get_cycle, get_period};
+use crate::msg::{QueryMsg, ConfigResponse, StartTimeResponse, TotalRewardsPoolResponse, StakerHistoryResponse, TokenInfosResponse, RewardsScheduleResponse, EstimateRewardsResponse, NextClaimResponse, WithdrawRewardsPoolResponse, DisableResponse, NumberOfStakedNftsResponse, StakedAllNftInfoResponse, MaxComputePeriodResponse, StakedNftsByOwnerResponse, TokenInfoMsg, GetGrantsResponse, UnbondingDurationResponse, GetCurrentCycleAndPeriodResponse};
 use crate::state::{CONFIG_STATE, REWARDS_SCHEDULE, START_TIMESTAMP, DISABLE, TOTAL_REWARDS_POOL, STAKER_HISTORIES, TOKEN_INFOS, NEXT_CLAIMS, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant, UNBONDING_DURATION};
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -16,6 +16,7 @@ pub fn query(
 ) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetConfig {} => to_binary(&get_config(deps)?),
+        QueryMsg::GetCurrentCycleAndPeriod {} => to_binary(&get_current_cycle_and_period(deps, env)?),
         QueryMsg::GetAllGrants {} => to_binary(&get_all_grants(deps)?),
         QueryMsg::GetRewardsSchedule {} => to_binary(&get_rewards_schedule(deps)?),
         QueryMsg::GetMaxComputePeriod {} => to_binary(&get_max_compute_period(deps)?),
@@ -44,6 +45,45 @@ fn get_config(deps: Deps) -> StdResult<ConfigResponse> {
         white_listed_nft_contract: config_state.white_listed_nft_contract.to_string(),
         rewards_token_contract: config_state.rewards_token_contract.to_string(),
     })
+}
+
+// query current cycle and period.
+fn get_current_cycle_and_period(
+    deps: Deps,
+    env: Env,
+) -> StdResult<GetCurrentCycleAndPeriodResponse> {
+    let current_cycle: u64;
+    let current_period: u64;
+    let timestamp = env.block.time.seconds();
+
+    let start_timestamp = START_TIMESTAMP.may_load(deps.storage)?;
+    if start_timestamp.is_none() {
+        return Ok(GetCurrentCycleAndPeriodResponse::not_started())
+    }
+
+    let config = CONFIG_STATE.load(deps.storage)?;
+
+    let get_cycle = get_cycle(timestamp, start_timestamp.unwrap(), config.clone());
+    match get_cycle {
+        Ok(t) => {
+            current_cycle = t;
+        },
+        Err(e) => {
+            return Ok(GetCurrentCycleAndPeriodResponse::with_err(e))
+        }
+    }
+
+    let get_period = get_period(current_cycle, config);
+    match get_period {
+        Ok(t) => {
+            current_period = t;
+        },
+        Err(e) => {
+            return Ok(GetCurrentCycleAndPeriodResponse::with_err(e))
+        }
+    }
+
+    Ok(GetCurrentCycleAndPeriodResponse::new(current_cycle, current_period))
 }
 
 // query granted addresses.

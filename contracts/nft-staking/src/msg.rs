@@ -64,6 +64,7 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     GetConfig {},
+    GetCurrentCycleAndPeriod {},
     GetAllGrants {},
     GetRewardsSchedule {},
     GetMaxComputePeriod {},
@@ -141,6 +142,42 @@ pub struct ConfigResponse {
     pub period_length_in_cycles: u64,
     pub white_listed_nft_contract: String,
     pub rewards_token_contract: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct GetCurrentCycleAndPeriodResponse {
+    pub current_cycle: u64,
+    pub current_period: u64,
+    pub res_msg: String,
+}
+
+impl GetCurrentCycleAndPeriodResponse {
+    pub fn new(
+        current_cycle: u64,
+        current_period: u64,
+    ) -> Self {
+        GetCurrentCycleAndPeriodResponse { 
+            current_cycle, 
+            current_period, 
+            res_msg: SUCCESS.to_string() 
+        }
+    }
+
+    pub fn not_started() -> Self {
+        GetCurrentCycleAndPeriodResponse { 
+            current_cycle: 0,
+            current_period: 0, 
+            res_msg: ContractError::NotStarted {}.to_string(),
+        }
+    }
+
+    pub fn with_err(e: ContractError) -> Self {
+        GetCurrentCycleAndPeriodResponse { 
+            current_cycle: 0,
+            current_period: 0,  
+            res_msg: e.to_string()  
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
