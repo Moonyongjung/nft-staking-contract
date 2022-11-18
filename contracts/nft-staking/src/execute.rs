@@ -520,6 +520,7 @@ pub fn unstake_nft(
 
     let start_timestamp = check_start_timestamp(deps.branch())?;
     let timestamp = env.block.time.seconds();
+    let disable = check_disable(deps.branch())?;
     let is_staked = token_info.clone().is_staked;
 
     // the bond status of requested nft that is "BONDED" is replaced to "UNBONDING".
@@ -546,7 +547,6 @@ pub fn unstake_nft(
     check_unbonding_end(deps.as_ref(), token_info.clone(), timestamp.clone())?; 
 
     let current_cycle = get_cycle(timestamp, start_timestamp, config.clone())?;
-    let disable = check_disable(deps.branch())?;
 
     // before unstake the nft by staker, rewards token balances are transfer to staker.
     let max_compute_period = MAX_COMPUTE_PERIOD.load(deps.branch().storage)?;
