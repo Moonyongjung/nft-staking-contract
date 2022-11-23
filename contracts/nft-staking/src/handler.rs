@@ -1,4 +1,4 @@
-use std::{ops::Add};
+use std::{ops::Add, str::FromStr};
 
 use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps, Coin, Env};
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
@@ -6,9 +6,13 @@ use cw721::{Cw721ExecuteMsg};
 
 use crate::{state::{Config, Snapshot, STAKER_HISTORIES, START_TIMESTAMP, DISABLE, NEXT_CLAIMS, Claim, REWARDS_SCHEDULE, NextClaim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, TOKEN_INFOS, UNBONDING, TokenInfo, UNBONDING_DURATION, UNBONDED}, ContractError, msg::{UpdateHistoriesMsg}};
 
+pub const CHECK_REWARDS_POOL_AIM_EMPTY: &str = "check_empty_rewards_pool";
+pub const CHECK_REWARDS_POOL_AIM_INSUFFICIENT: &str = "check_insufficient_rewards_pool";
+pub const CHECK_REWARDS_POOL_AIM_BOTH: &str = "both";
 pub const IS_STAKED: bool = true;
 const MIN_CYCLE_LENGTH: u64 = 10;
 const MIN_PERIOD: u64 = 2;
+
 
 // convert string to Addr type.
 pub fn from_string_to_addr(
@@ -180,6 +184,37 @@ pub fn check_unbonding_end(
     Ok(true)
 }
 
+// check empty rewards pool of nft staking contract.
+pub fn check_rewards_pool_balance(
+    deps: DepsMut,
+    env: Env,
+    config: Config,
+    aim: &str,
+    amount: Option<u128>
+) -> Result<(), ContractError> {
+    let address = env.contract.address.to_string();
+    let rewards_token_contract = config.clone().rewards_token_contract;
+    let balance_response = query_rewards_token_balance(deps.as_ref(), address.clone(), rewards_token_contract.clone())?;
+
+    if aim == CHECK_REWARDS_POOL_AIM_EMPTY || aim == CHECK_REWARDS_POOL_AIM_BOTH {
+        if balance_response.balance == Uint128::from_str("0").unwrap() {
+            return Err(ContractError::EmptyRewardsPool {})
+        } 
+    } 
+    
+    if aim == CHECK_REWARDS_POOL_AIM_INSUFFICIENT || aim == CHECK_REWARDS_POOL_AIM_BOTH {
+        let amount = amount.unwrap();
+        if balance_response.balance.u128() < amount {
+            return Err(ContractError::InsufficientRewardsPool { 
+                rewards_pool_balance: balance_response.balance.u128(), 
+                claim_amount: amount, 
+            })
+        }
+    }
+
+    Ok(())
+}
+
 // execute token transfer.
 pub fn execute_token_contract_transfer(
     rewards_token_contract: String,
@@ -207,9 +242,7 @@ pub fn execute_transfer_nft_unstake(
     token_id: String,
     staker: String,
     nft_contract: String,
-) -> Result<Vec<CosmosMsg>, ContractError> {
-    let mut messages: Vec<CosmosMsg> = vec![];
-
+) -> Result<CosmosMsg, ContractError> {
     let transfer_from: CosmosMsg = CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: nft_contract,
         msg: to_binary(&Cw721ExecuteMsg::TransferNft { 
@@ -218,9 +251,9 @@ pub fn execute_transfer_nft_unstake(
         })?,
         funds: vec![]
     });
-    messages.push(transfer_from);
 
-    Ok(messages)
+
+    Ok(transfer_from)
 }
 
 // query rewards token balance.

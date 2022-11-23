@@ -1,14 +1,12 @@
-use std::str::FromStr;
-
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, CosmosMsg};
 use cw2::set_contract_version;
 use cw20::{Cw20ReceiveMsg, Expiration};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
-use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, contract_info, check_contract_owner_only, check_unbonding_end};
+use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, contract_info, check_contract_owner_only, check_unbonding_end, check_rewards_pool_balance, CHECK_REWARDS_POOL_AIM_EMPTY, CHECK_REWARDS_POOL_AIM_BOTH, CHECK_REWARDS_POOL_AIM_INSUFFICIENT};
 use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
 use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant, UNBONDING_DURATION, UNBONDING, BONDED};
 
@@ -363,9 +361,11 @@ pub fn withdraw_rewards_pool(
 ) -> Result<Response, ContractError> {
     check_contract_owner(deps.branch(), info.clone(), env.clone(), config.clone())?;
 
-    let disabled = check_disable(deps)?;
+    let disabled = check_disable(deps.branch())?;
     let rewards_token_contract = config.clone().rewards_token_contract;
     let owner = info.clone().sender;
+
+    check_rewards_pool_balance(deps.branch(), env.clone(), config.clone(), CHECK_REWARDS_POOL_AIM_INSUFFICIENT, Some(amount.clone()))?;
     let message = execute_token_contract_transfer(rewards_token_contract, owner.to_string(), amount.clone())?;
 
     Ok(Response::new()
@@ -426,12 +426,7 @@ pub fn stake_nft(
     }
 
     // check empty rewards pool of nft staking contract.
-    let address = env.contract.address.to_string();
-    let rewards_token_contract = config.clone().rewards_token_contract;
-    let balance_response = query_rewards_token_balance(deps.as_ref(), address.clone(), rewards_token_contract.clone())?;
-    if balance_response.balance == Uint128::from_str("0").unwrap() {
-        return Err(ContractError::EmptyRewardsPool {})
-    }
+    check_rewards_pool_balance(deps.branch(), env.clone(), config.clone(), CHECK_REWARDS_POOL_AIM_EMPTY, None)?;
 
     // check rewards schedule.
     let rewards_schedule = REWARDS_SCHEDULE.may_load(deps.branch().storage)?;
@@ -522,6 +517,7 @@ pub fn unstake_nft(
     let timestamp = env.block.time.seconds();
     let disable = check_disable(deps.branch())?;
     let is_staked = token_info.clone().is_staked;
+    let mut messages: Vec<CosmosMsg> = vec![];
 
     // the bond status of requested nft that is "BONDED" is replaced to "UNBONDING".
     if token_info.bond_status == BONDED {
@@ -601,27 +597,32 @@ pub fn unstake_nft(
 
         TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info)?;
     }
-    let claim_message = execute_token_contract_transfer(config.clone().rewards_token_contract, recipient.clone().unwrap(), remain_rewards_value.clone());
-    match claim_message {
-        Ok(_) => {},
-        Err(e) => {
-            return Err(e)
-        }
-    }
 
+    if remain_rewards_value != 0 {
+        // check empty and sufficient rewards pool of nft staking contract.
+        // for checking sufficient rewards pool, must input amount.
+        check_rewards_pool_balance(deps.branch(), env.clone(), config.clone(), CHECK_REWARDS_POOL_AIM_BOTH, Some(remain_rewards_value.clone()))?;
+        let claim_message = execute_token_contract_transfer(config.clone().rewards_token_contract, recipient.clone().unwrap(), remain_rewards_value.clone())?;
+        let claim_cosmos_msg = claim_message
+            .get(0)
+            .unwrap()
+            .clone();
+
+        messages.push(claim_cosmos_msg)
+    }
+    
     // next claims of specified nft are eliminated.
     NEXT_CLAIMS.remove(deps.branch().storage, staker_tokenid_key.clone());
     manage_number_nfts(deps.branch(), false);
 
-    let message = execute_transfer_nft_unstake(token_id, staker, config.white_listed_nft_contract)?;
+    messages.push(execute_transfer_nft_unstake(token_id, staker, config.white_listed_nft_contract)?);
 
     Ok(Response::new()
         .add_attribute("method", "unstake_nft")
         .add_attribute("request_unstake_time", timestamp.to_string())
         .add_attribute("claim_remain_rewards", remain_rewards_value.to_string())
         .add_attribute("recipient_remain_rewards", recipient.unwrap())
-        .add_messages(claim_message.unwrap())
-        .add_messages(message)
+        .add_messages(messages)
     )
 }
 
@@ -677,16 +678,9 @@ pub fn claim_rewards(
         }
     }
 
-    let contract_address = env.contract.address.to_string();
-
-    // nft staking contract balances
-    let balance_response = query_rewards_token_balance(deps.as_ref(), contract_address.clone(), config.rewards_token_contract.clone())?;
-    if balance_response.balance.u128() < claim.amount {
-        return Err(ContractError::InsufficientRewardsPool { 
-            rewards_pool_balance: balance_response.balance.u128(), 
-            claim_amount: claim.amount, 
-        })
-    }
+    // check sufficient rewards pool of nft staking contract.
+    // for checking sufficient rewards pool, must input amount.
+    check_rewards_pool_balance(deps.branch(), env.clone(), config.clone(), CHECK_REWARDS_POOL_AIM_INSUFFICIENT, Some(claim.amount.clone()))?;
 
     // free up memory on already processed staker snapshots.
     let staker_history = STAKER_HISTORIES.may_load(deps.storage, staker_tokenid_key.clone())?;
@@ -729,13 +723,7 @@ pub fn claim_rewards(
     }
 
     // transfer token amount of staked rewards.
-    let message = execute_token_contract_transfer(config.rewards_token_contract, recipient.clone(), claim.amount);
-    match message {
-        Ok(_) => {},
-        Err(e) => {
-            return Err(e)
-        }
-    }
+    let message = execute_token_contract_transfer(config.rewards_token_contract, recipient.clone(), claim.amount)?;
 
     Ok(Response::new()
         .add_attribute("method", "claim_rewards")
@@ -744,6 +732,6 @@ pub fn claim_rewards(
         .add_attribute("claim_amount", claim.amount.to_string())
         .add_attribute("claim_recipient", recipient.to_string())
         .add_attribute("exist_next_claim", exist_next_claim.to_string())
-        .add_messages(message.unwrap())
+        .add_messages(message)
     )
 }

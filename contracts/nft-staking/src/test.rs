@@ -790,10 +790,12 @@ mod tests{
             TOKEN_INFOS.save(deps.branch().storage, token_id.clone(), &token_info)?;
         }
 
-        // for test, execute token contract trasfer
-        let res = test_execute_token_contract_transfer(deps.branch(), env.clone(), info.clone(), recipient.clone().unwrap(), remain_rewards_value);
-        assert_eq!(staker, res.attributes.get(2).unwrap().value);
-        assert_eq!(remain_rewards_value.to_string(), res.attributes.get(3).unwrap().value);
+        if remain_rewards_value != 0 {
+            // for test, execute token contract trasfer
+            let res = test_execute_token_contract_transfer(deps.branch(), env.clone(), info.clone(), recipient.clone().unwrap(), remain_rewards_value);
+            assert_eq!(staker, res.attributes.get(2).unwrap().value);
+            assert_eq!(remain_rewards_value.to_string(), res.attributes.get(3).unwrap().value);
+        }
 
         NEXT_CLAIMS.remove(deps.branch().storage, staker_tokenid_key.clone());
         manage_number_nfts(deps.branch(), false);
