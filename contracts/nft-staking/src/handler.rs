@@ -1,6 +1,6 @@
 use std::{ops::Add, str::FromStr};
 
-use cosmwasm_std::{StdResult, DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps, Coin, Env};
+use cosmwasm_std::{DepsMut, Uint128, Addr, CosmosMsg, to_binary, WasmMsg, MessageInfo, QueryRequest, WasmQuery, Deps, Coin, Env};
 use cw20::{Cw20ExecuteMsg, Cw20QueryMsg, BalanceResponse, Cw20ReceiveMsg};
 use cw721::{Cw721ExecuteMsg};
 
@@ -12,16 +12,6 @@ pub const CHECK_REWARDS_POOL_AIM_BOTH: &str = "both";
 pub const IS_STAKED: bool = true;
 const MIN_CYCLE_LENGTH: u64 = 10;
 const MIN_PERIOD: u64 = 2;
-
-
-// convert string to Addr type.
-pub fn from_string_to_addr(
-    deps: DepsMut,
-    addr_string: String
-) -> StdResult<Addr> {
-    let return_addr = deps.api.addr_validate(&addr_string).unwrap();
-    Ok(return_addr)
-}
 
 // get current period.
 pub fn get_current_period(

@@ -1,17 +1,17 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, CosmosMsg};
-use cw2::set_contract_version;
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, CosmosMsg, StdError};
+use cw2::{set_contract_version, get_contract_version};
 use cw20::{Cw20ReceiveMsg, Expiration};
 use cw721::Cw721ReceiveMsg;
 
 use crate::error::{ContractError};
 use crate::handler::{execute_token_contract_transfer, get_cycle, get_period, update_histories, IS_STAKED, check_start_timestamp, check_disable, check_contract_owner, execute_transfer_nft_unstake, compute_rewards, staker_tokenid_key, query_rewards_token_balance, is_valid_cycle_length, is_valid_period_length, manage_number_nfts, contract_info, check_contract_owner_only, check_unbonding_end, check_rewards_pool_balance, CHECK_REWARDS_POOL_AIM_EMPTY, CHECK_REWARDS_POOL_AIM_BOTH, CHECK_REWARDS_POOL_AIM_INSUFFICIENT};
-use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg};
+use crate::msg::{ExecuteMsg, InstantiateMsg, SetConfigMsg, MigrateMsg};
 use crate::state::{Config, CONFIG_STATE, START_TIMESTAMP, REWARDS_SCHEDULE, TOTAL_REWARDS_POOL, DISABLE, NEXT_CLAIMS, NextClaim, TOKEN_INFOS, TokenInfo, STAKER_HISTORIES, Claim, NUMBER_OF_STAKED_NFTS, MAX_COMPUTE_PERIOD, GRANTS, Grant, UNBONDING_DURATION, UNBONDING, BONDED};
 
 // version info for migration info
-const CONTRACT_NAME: &str = "nft-staking";
+const CONTRACT_NAME: &str = env!("CARGO_PKG_NAME");
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -43,8 +43,8 @@ pub fn instantiate(
 
     // default max compute period = 2500.
     // default unbonding duration = 1814400 (= 3 weeks).
-    let default_max_compute_period: u64 = 2500;
-    let default_unbonding_duration: u64 = 1814400;
+    let default_max_compute_period: u64 = 2_500;
+    let default_unbonding_duration: u64 = 1_814_400;
 
     // Default of total rewards pool is zero and of disable state is false.
     TOTAL_REWARDS_POOL.save(deps.storage, &0)?;
@@ -457,7 +457,7 @@ pub fn stake_nft(
 
     let update_histories_response = update_histories(deps.branch(), staker_tokenid_key.clone(), IS_STAKED, current_cycle)?;
 
-    let token_infos = TOKEN_INFOS.may_load(deps.branch().storage, token_id.clone()).unwrap();
+    let token_infos = TOKEN_INFOS.may_load(deps.branch().storage, token_id.clone())?;
     if !token_infos.is_none() {
 
         // prevent duplication.
@@ -472,7 +472,7 @@ pub fn stake_nft(
         }    
     }
 
-    let next_claims = NEXT_CLAIMS.may_load(deps.branch().storage, staker_tokenid_key.clone()).unwrap();
+    let next_claims = NEXT_CLAIMS.may_load(deps.branch().storage, staker_tokenid_key.clone())?;
 
     // initialise the next claim if it was the first stake for this staker or if 
     // the next claim was re-initialised.
@@ -579,7 +579,7 @@ pub fn unstake_nft(
                 start_timestamp,
                 config.clone(),
                 token_id.clone()
-            ).unwrap();
+            )?;
 
             if compute_reward.0.amount != 0 {
                 remain_rewards_value = remain_rewards_value + compute_reward.0.amount;
@@ -734,4 +734,26 @@ pub fn claim_rewards(
         .add_attribute("exist_next_claim", exist_next_claim.to_string())
         .add_messages(message)
     )
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(
+    deps: DepsMut, 
+    _env: Env, 
+    _msg: MigrateMsg
+) -> Result<Response, ContractError> {
+    let ver = get_contract_version(deps.storage)?;
+    if ver.contract != CONTRACT_NAME {
+        return Err(StdError::generic_err("Can only upgrade from same type").into());
+    }
+
+    #[allow(clippy::cmp_owned)]
+    if ver.version >= CONTRACT_VERSION.to_string() {
+        return Err(StdError::generic_err("Cannot upgrade from a newer version").into());
+    }
+
+    // set the new version
+    cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    Ok(Response::default())
 }
