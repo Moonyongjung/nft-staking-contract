@@ -275,11 +275,7 @@ pub fn estimate_rewards(
     staker: String,
 ) -> StdResult<EstimateRewardsResponse> {
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
-    let next_claim = NEXT_CLAIMS.may_load(deps.storage, staker_tokenid_key.clone())?;
-    if next_claim.is_none() {
-        return Ok(EstimateRewardsResponse::invalid_claim(staker_tokenid_key))
-    }
-
+    
     let start_timestamp = START_TIMESTAMP.may_load(deps.storage)?;
     if start_timestamp.is_none() {
         return Ok(EstimateRewardsResponse::not_started(staker_tokenid_key))
@@ -288,6 +284,11 @@ pub fn estimate_rewards(
     let disable = DISABLE.load(deps.storage)?;
     if disable == true {
         return Ok(EstimateRewardsResponse::disabled(staker_tokenid_key))
+    }
+
+    let next_claim = NEXT_CLAIMS.may_load(deps.storage, staker_tokenid_key.clone())?;
+    if next_claim.is_none() {
+        return Ok(EstimateRewardsResponse::invalid_claim(staker_tokenid_key))
     }
 
     let config = CONFIG_STATE.load(deps.storage)?;
