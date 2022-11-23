@@ -644,7 +644,12 @@ pub fn claim_rewards(
     let staker = info.clone().sender.to_string();
     let staker_tokenid_key = staker_tokenid_key(staker.clone(), token_id.clone());
 
-    let token_info = TOKEN_INFOS.load(deps.branch().storage, token_id.clone())?;
+    let check_token_info = TOKEN_INFOS.may_load(deps.branch().storage, token_id.clone())?;
+    if check_token_info.is_none() {
+        return Err(ContractError::InvalidTokenId {})
+    }
+
+    let token_info = check_token_info.unwrap();
 
     // although the time reaches unbonded status, the staker should not claim directly.
     // the staker is able to get balances of rewards only execute unstake function.
