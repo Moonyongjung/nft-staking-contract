@@ -481,7 +481,6 @@ mod tests{
         rewards_token_contract: String,
     ) -> Response {
         let msg = InstantiateMsg {
-            owner: MINTER.to_string(),
             cycle_length_in_seconds: CYCLE_LENGTH_IN_SECONDS,
             period_length_in_cycles: PERIOD_LENGTH_IN_CYCLES,
             white_listed_nft_contract,

@@ -13,7 +13,6 @@ pub const SUCCESS: &str = "success";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
-    pub owner: String,
     pub cycle_length_in_seconds: u64,
     pub period_length_in_cycles: u64,
     pub white_listed_nft_contract: String,
